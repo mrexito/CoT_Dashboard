@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 import dash_mantine_components as dmc
 from influxdb_client import InfluxDBClient
+import dash_bootstrap_components as dbc
 
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -11,27 +12,26 @@ df = pd.read_csv('https://raw.githubusercontent.com/plotly/datasets/master/gapmi
 
 app = Dash()
 
-token = "D7cFFZ7LzmMJn0qO-85EYhjRfhKqydGLSE-gkoR-e1RLivHN_Ud_mj_r5s4kGXKHtUg-n0xI7I3L0-6Uv8ZVhw=="
+token = "3baLLLDojDOW9jpoBOx1ejzprCzsMHPpBhFADeEZuKJToIP6h_MjU3fsCwgtBIKC9Aaz3ufBNiL-cREirFbXCQ=="
 
-client = InfluxDBClient(url="http://localhost:8086", token=token, org="Student")
+client = InfluxDBClient(url="https://eu-central-1-1.aws.cloud2.influxdata.com", token=token, org="cot-plotly")
 
-app.layout = dmc.Container([
-    dmc.Title('My First App with Data, Graph, and Controls', color="blue", size="h3"),
+app.layout = dbc.Container([
+    dmc.Title('CoT Data Dashboard', color="blue", size="h3"),
     dmc.RadioGroup(
-            [dmc.Radio(i, value=i) for i in  ['pop', 'lifeExp', 'gdpPercap']],
-            id='my-dmc-radio-item',
-            value='lifeExp',
-            size="sm"
-        ),
-    dmc.Grid([
-        dmc.Col([
-            dash_table.DataTable(data=df.to_dict('records'), page_size=12, style_table={'overflowX': 'auto'})
-        ], span=6),
-        dmc.Col([
+        [dmc.Radio(field, value=field) for field in fields],
+        id='my-dmc-radio-item',
+        value=fields[0] if fields else "default",
+        size="sm"
+    ),
+    dbc.Row([
+        dbc.Col([
+            dash_table.DataTable(data=data.to_dict('records'), page_size=12, style_table={'overflowX': 'auto'})
+        ], width=6),
+        dbc.Col([
             dcc.Graph(figure={}, id='graph-placeholder')
-        ], span=6),
+        ], width=6),
     ]),
-
 ], fluid=True)
 
 @callback(

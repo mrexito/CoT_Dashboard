@@ -1,16 +1,17 @@
 import pandas as pd
 from influxdb_client import InfluxDBClient, Point, WritePrecision, WriteOptions
 import os
+from datetime import datetime
 
 # Define the file path
-file_path = os.path.expanduser("D:\OneDrive_BFH\OneDrive - Berner Fachhochschule\Fachhochschule\CASE_WI\2024\CoT-DatenCoT-Data_Last-ten-years.xlsx")
+file_path = os.path.join(os.getcwd(), "CoT-Data", "CoT-Data_Last-ten-years.xlsx")
 
 # Initialize the InfluxDB client
-token = "cETaLUC7pQY7h0szhM82mq7BPwfBRYQwZrZvytHazYC42gMW71i6ll_atKz5A7qanA_cF0G3_REqL2dYlowRWQ=="
-org = "BFH"
+token = "3baLLLDojDOW9jpoBOx1ejzprCzsMHPpBhFADeEZuKJToIP6h_MjU3fsCwgtBIKC9Aaz3ufBNiL-cREirFbXCQ=="
+org = "cot-plotly"
 bucket = "CoT-Data"
 
-client = InfluxDBClient(url="http://localhost:8086", token=token)
+client = InfluxDBClient(url="https://eu-central-1-1.aws.cloud2.influxdata.com", token=token)
 
 # Read the Excel file into a DataFrame
 df = pd.read_excel(file_path, sheet_name='Sheet1')
@@ -20,6 +21,10 @@ write_api = client.write_api(write_options=WriteOptions(batch_size=500, flush_in
 
 # Iterate through the DataFrame and write data points to InfluxDB
 for index, row in df.iterrows():
+    # Set the timestamp to the current time
+    timestamp = datetime.utcnow()
+
+    # Create the InfluxDB point with the current timestamp
     point = Point("cot_data") \
         .tag("market_names", row['Market Names']) \
         .field("Open Interest", row['Open Interest']) \
@@ -46,7 +51,7 @@ for index, row in df.iterrows():
         .field("Traders Other Rept Long", row['Traders_Other_Rept_Long']) \
         .field("Traders Other Rept Short", row['Traders_Other_Rept_Short']) \
         .field("Traders Other Rept Spread", row['Traders_Other_Rept_Spread']) \
-        .time(pd.to_datetime(row['Date'], format='%y%m%d'), WritePrecision.NS)
+        .time(timestamp, WritePrecision.NS)  # Use the current timestamp
     write_api.write(bucket=bucket, org=org, record=point)
 
 # Ensure all data is written and wait until all pending writes are completed

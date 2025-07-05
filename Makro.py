@@ -15,10 +15,6 @@ def create_folder_on_desktop(folder_name):
 # Function to download and verify zip file
 def download_file(url, folder_path, year):
     response = requests.get(url)
-    print(response.status_code) 
-    if response.status_code != 200:
-        print(f"Fehler: Konnte die Webseite nicht laden. Statuscode: {response.status_code}")
-    return ModuleNotFoundError
     zip_path = os.path.join(folder_path, f'{year}.zip')
     with open(zip_path, 'wb') as file:
         file.write(response.content)

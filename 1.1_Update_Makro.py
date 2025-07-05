@@ -1,19 +1,17 @@
-#!/usr/bin/env python3
 import os
 import requests
 from bs4 import BeautifulSoup
 import zipfile
 import pandas as pd
 
-# Function to create folder on desktop
-def create_folder_on_desktop(folder_name):
-    desktop_path = os.path.join(os.path.join(os.path.expanduser('~')), 'Desktop')
-    folder_path = os.path.join(desktop_path, folder_name)
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
-    return folder_path
+# Funktion, um einen Ordner im /tmp-Verzeichnis von Lambda zu erstellen
+def create_folder_in_tmp(folder_name):
+    tmp_path = os.path.join('/tmp', folder_name)
+    if not os.path.exists(tmp_path):
+        os.makedirs(tmp_path)
+    return tmp_path
 
-# Function to download and verify zip file
+# Funktion zum Herunterladen und Speichern einer ZIP-Datei im /tmp-Verzeichnis
 def download_file(url, folder_path, year):
     response = requests.get(url)
     zip_path = os.path.join(folder_path, f'{year}.zip')
@@ -21,7 +19,7 @@ def download_file(url, folder_path, year):
         file.write(response.content)
     return zip_path
 
-# Function to extract files from zip if valid
+# Funktion zum Entpacken der ZIP-Datei
 def extract_zip(zip_path, folder_path, year):
     try:
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
@@ -38,7 +36,7 @@ def extract_zip(zip_path, folder_path, year):
         os.remove(zip_path)
         return None
 
-# Function to verify if the file is a valid Excel file
+# Überprüfung, ob die Datei eine gültige Excel-Datei ist
 def is_valid_excel(file_path):
     try:
         pd.read_excel(file_path, nrows=1)
@@ -47,7 +45,7 @@ def is_valid_excel(file_path):
         print(f"Error reading {file_path}: {e}")
         return False
 
-# Function to update the combined xls file with new data
+# Funktion zur Aktualisierung der kombinierten Excel-Datei
 def update_combined_xls(folder_path, year, output_file_name):
     columns_to_keep = [
         "Market_and_Exchange_Names",
@@ -107,12 +105,10 @@ def update_combined_xls(folder_path, year, output_file_name):
         "Traders_Other_Rept_Spread_All": "Traders_Other_Rept_Spread"
     }
 
-    file_path = os.path.join(folder_path, f'{year}_CoT-Data.xls')
     if os.path.exists(file_path) and is_valid_excel(file_path):
         df_new = pd.read_excel(file_path, usecols=columns_to_keep)
         df_new.rename(columns=column_rename_map, inplace=True)
 
-        # Filter and rename market names
         market_filter = {
             "GOLD - COMMODITY EXCHANGE INC.": "Gold",
             "SILVER - COMMODITY EXCHANGE INC.": "Silver",
@@ -122,8 +118,7 @@ def update_combined_xls(folder_path, year, output_file_name):
         }
         
         df_new = df_new[df_new["Market Names"].isin(market_filter.keys())]
-        df_new["Market Names"] = df_new["Market Names"].replace(market_filter)
-
+        df_new["Market Names"].replace(market_filter, inplace=True)
 
         output_file_path = os.path.join(folder_path, f'{output_file_name}.xlsx')
         if os.path.exists(output_file_path):
@@ -132,28 +127,68 @@ def update_combined_xls(folder_path, year, output_file_name):
             df_combined.to_excel(output_file_path, index=False, engine='openpyxl')
         else:
             df_new.to_excel(output_file_path, index=False, engine='openpyxl')
+        
+        return df_new  # Rückgabe von df_new für weitere Verarbeitung
     else:
         print(f"File {file_path} is not a valid Excel file or does not exist.")
+        return None
 
-# Main function to orchestrate the update process
-def main():
-    folder_path = create_folder_on_desktop('CoT-Data')
+def lambda_handler(event, context):
+    folder_path = create_folder_in_tmp('CoT-Data')
     year = 2024
     base_url = 'https://www.cftc.gov/MarketReports/CommitmentsofTraders/HistoricalCompressed/index.htm'
     response = requests.get(base_url)
     soup = BeautifulSoup(response.content, 'html.parser')
 
-    # Select the latest 2024 report
     selector = '#content-container > section > div > article > div > div > table:nth-child(2) > tbody > tr:nth-child(1) > td:nth-child(1) > a:nth-child(2)'
     link = soup.select_one(selector).get('href')
     download_url = 'https://www.cftc.gov' + link
     zip_path = download_file(download_url, folder_path, year)
-    extract_zip(zip_path, folder_path, year)
+    final_file_path = extract_zip(zip_path, folder_path, year)
     
-    update_combined_xls(folder_path, year, 'CoT-Data_Last-ten-years')
+    # Überprüfen, ob die Datei erfolgreich extrahiert wurde
+    if final_file_path:
+        df_new = update_combined_xls(folder_path, year, 'CoT-Data_Last-ten-years')
+        if df_new is not None and not df_new.empty:
+            required_columns = ["Market Names", "Open Interest", "Producer/Merchant/Processor/User Long", "Producer/Merchant/Processor/User Short", "Date"]
+            missing_columns = [col for col in required_columns if col not in df_new.columns]
 
-if __name__ == "__main__":
-    main()
+            if not missing_columns:
+                print("Uploading data to InfluxDB...")
+                upload_to_influxdb(df_new, bucket, org, token, url)
+                print("Upload erfolgreich.")
+            else:
+                print(f"Fehlende Spalten: {missing_columns}. Upload abgebrochen.")
+        else:
+            print("Keine gültigen Daten zum Hochladen gefunden.")
+    else:
+        print("No valid file was extracted.")
 
-print("Skript erfolgreich ausgeführt!")
+
+
+
+
+from influxdb_client import InfluxDBClient, Point, WriteOptions
+
+def upload_to_influxdb(dataframe, bucket, org, token, url):
+    client = InfluxDBClient(url=url, token=token, org=org)
+    write_api = client.write_api(write_options=WriteOptions(batch_size=500, flush_interval=10_000))
+    
+    for _, row in dataframe.iterrows():
+        point = Point("cot_data") \
+            .tag("market", row["Market Names"]) \
+            .field("open_interest", row["Open Interest"]) \
+            .field("producer_long", row["Producer/Merchant/Processor/User Long"]) \
+            .field("producer_short", row["Producer/Merchant/Processor/User Short"]) \
+            .time(row["Date"])
+        write_api.write(bucket=bucket, org=org, record=point)
+    
+    write_api.flush()
+    client.close()
+
+bucket = "CoT-Data"
+org = "cot-plotly"
+token = "3baLLLDojDOW9jpoBOx1ejzprCzsMHPpBhFADeEZuKJToIP6h_MjU3fsCwgtBIKC9Aaz3ufBNiL-cREirFbXCQ=="
+url = "https://eu-central-1-1.aws.cloud2.influxdata.com"  
+
 
