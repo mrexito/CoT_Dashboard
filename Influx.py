@@ -3,11 +3,11 @@ from influxdb_client import InfluxDBClient, Point, WritePrecision, WriteOptions
 import os
 
 # Define the file path
-file_path = os.path.expanduser("D:\OneDrive_BFH\OneDrive - Berner Fachhochschule\Fachhochschule\CASE_WI\2024\CoT-DatenCoT-Data_Last-ten-years.xlsx")
+file_path = os.path.expanduser(r"C:\Users\basil\Desktop\CoT-Data\CoT-Data_Last-ten-years.xlsx")
 
 # Initialize the InfluxDB client
-token = "cETaLUC7pQY7h0szhM82mq7BPwfBRYQwZrZvytHazYC42gMW71i6ll_atKz5A7qanA_cF0G3_REqL2dYlowRWQ=="
-org = "BFH"
+token = "GmtV-5jzEZCrfZ7Bq-qhc8b7kf4g5nMjYy2sf6ix149GFULNxSAHU5ZVXA-m-xaaxyUKF9wZt7w44h95WdoXJg=="
+org = "Student"
 bucket = "CoT-Data"
 
 client = InfluxDBClient(url="http://localhost:8086", token=token)

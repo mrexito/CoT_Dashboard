@@ -16,10 +16,10 @@ def open_browser():
 
 # Connect to InfluxDB
 url = "http://localhost:8086"
-token = "cETaLUC7pQY7h0szhM82mq7BPwfBRYQwZrZvytHazYC42gMW71i6ll_atKz5A7qanA_cF0G3_REqL2dYlowRWQ=="
+token = "GmtV-5jzEZCrfZ7Bq-qhc8b7kf4g5nMjYy2sf6ix149GFULNxSAHU5ZVXA-m-xaaxyUKF9wZt7w44h95WdoXJg=="
 #token = "D7cFFZ7LzmMJn0qO-85EYhjRfhKqydGLSE-gkoR-e1RLivHN_Ud_mj_r5s4kGXKHtUg-n0xI7I3L0-6Uv8ZVhw=="
-org = "BFH"
-# org = "Student"
+# org = "BFH"
+org = "Student"
 bucket = "CoT-Data"
 #bucket = "CoT-Data"
 
@@ -94,9 +94,37 @@ df_pivoted['Total Long Traders'] = df_pivoted[['Traders Prod/Merc Short', 'Trade
 df_pivoted['Total Short Traders'] = df_pivoted[['Traders Prod/Merc Short', 'Traders Swap Short', 'Traders M Money Short']].sum(axis=1)
 df_pivoted['Long Position Size'] = df_pivoted['Producer/Merchant/Processor/User Long']
 df_pivoted['Short Position Size'] = df_pivoted['Producer/Merchant/Processor/User Short']
+df_pivoted['MML Position Size'] = (
+    df_pivoted['Managed Money Long'] / df_pivoted['Traders M Money Long']
+).replace([np.inf, -np.inf], np.nan)
+df_pivoted['MMS Position Size'] = (
+    df_pivoted['Managed Money Short'] / df_pivoted['Traders M Money Short']
+).replace([np.inf, -np.inf], np.nan)
+
 df_pivoted['Net Short Position Size'] = (
     df_pivoted['Short Position Size'] - df_pivoted['Long Position Size']
 )
+df_pivoted['PMPUL Position Size'] = (
+    df_pivoted['Producer/Merchant/Processor/User Long'] / df_pivoted['Traders Prod/Merc Long']
+).replace([np.inf, -np.inf], np.nan)
+
+df_pivoted['PMPUS Position Size'] = (
+    df_pivoted['Producer/Merchant/Processor/User Short'] / df_pivoted['Traders Prod/Merc Short']
+).replace([np.inf, -np.inf], np.nan)
+df_pivoted['SDL Position Size'] = (
+    df_pivoted['Swap Dealer Long'] / df_pivoted['Traders Swap Long']
+).replace([np.inf, -np.inf], np.nan)
+
+df_pivoted['SDS Position Size'] = (
+    df_pivoted['Swap Dealer Short'] / df_pivoted['Traders Swap Short']
+).replace([np.inf, -np.inf], np.nan)
+df_pivoted['ORL Position Size'] = (
+    df_pivoted['Other Reportables Long'] / df_pivoted['Traders Other Rept Long']
+).replace([np.inf, -np.inf], np.nan)
+
+df_pivoted['ORS Position Size'] = (
+    df_pivoted['Other Reportables Short'] / df_pivoted['Traders Other Rept Short']
+).replace([np.inf, -np.inf], np.nan)
 
 df_pivoted['MML Long OI'] = df_pivoted['Managed Money Long']
 df_pivoted['MML Short OI'] = -df_pivoted['Managed Money Short']
@@ -143,7 +171,8 @@ max_oi = max(df_pivoted[['PMPUL Relative Concentration', 'PMPUS Relative Concent
                          'SDL Relative Concentration', 'SDS Relative Concentration', 
                          'MML Relative Concentration', 'MMS Relative Concentration', 
                          'ORL Relative Concentration', 'ORS Relative Concentration']].max().max(),
-             abs(df_pivoted[['PMPUL Relative Concentration', 'PMPUS Relative Concentration', 
+             abs(df_pivoted[['PMPUL R'
+                             'elative Concentration', 'PMPUS Relative Concentration',
                              'SDL Relative Concentration', 'SDS Relative Concentration', 
                              'MML Relative Concentration', 'MMS Relative Concentration', 
                              'ORL Relative Concentration', 'ORS Relative Concentration']].min().min()))
@@ -208,9 +237,35 @@ def add_last_point_highlight(fig, df, x_col, y_col, inner_size=10, outer_line_wi
             showlegend=False  # Spur nicht in der Legende anzeigen
         ))
 
+def safe_sizes(series, exp=2.2, min_px=0):
+    s = pd.to_numeric(series, errors='coerce').clip(lower=0)
+    s = s.pow(1/exp).fillna(0)
+    s = s * 0.7
+    if min_px > 0:
+        s = s + min_px
+    return s
 
+def dynamic_bubble_sizes(series, steps=5):
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if s.empty:
+        return [50, 100, 150]  # Fallback
 
+    max_val = s.max()
+    # Aufrunden auf "schöne" Zahl
+    magnitude = 10 ** (len(str(int(max_val))) - 1)
+    max_rounded = int(np.ceil(max_val / magnitude) * magnitude)
 
+    # Gleichmäßig verteilte Werte
+    return np.linspace(max_rounded / steps, max_rounded, steps, dtype=int).tolist()
+
+def col(df, name):
+    """Gibt immer eine numerische Series zurück (NaN, falls Spalte fehlt)."""
+    if name in df:
+        return pd.to_numeric(df[name], errors='coerce')
+    return pd.Series(np.nan, index=df.index, dtype='float64')
+
+def safe_colors(series):
+    return pd.to_numeric(series, errors='coerce').fillna(0)
 
 # Function to calculate medians
 def calculate_medians(df):
@@ -248,11 +303,28 @@ def calculate_ranges(agg_df, indicator):
 
     return concentration_range * 100, clustering_range * 100
 
+def nz(series):
+    return pd.to_numeric(series, errors='coerce')
+
+def rel_concentration(oi_long, oi_short, total_oi):
+    """
+    RC = 100 * ( (OI_L / total_oi) - (OI_S / total_oi) )
+    → Werte typischerweise ca. -80 … +40 (je nach Markt und Gruppe)
+    """
+    oiL = nz(oi_long)
+    oiS = nz(oi_short)
+    tot = nz(total_oi).replace(0, np.nan)  # Division durch 0 vermeiden
+    return 100.0 * ((oiL / tot) - (oiS / tot))
+
 # Example calculation
 median_oi, median_traders = calculate_medians(df_pivoted)
 
 # Initialize the Dash app
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[dbc.themes.BOOTSTRAP],
+    external_scripts=["https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"]
+)
 
 # Layout of the app
 app.layout = html.Div([
@@ -289,8 +361,45 @@ app.layout = html.Div([
                         {'name': 'Difference (Long %)', 'id': 'Difference (Long %)'},
                         {'name': 'Difference (Short %)', 'id': 'Difference (Short %)'},
                         {'name': 'Difference (Spread %)', 'id': 'Difference (Spread %)'},
+                        {'name': 'Total Traders', 'id': 'Total Traders'},
                         {'name': '% of Traders', 'id': '% of Traders'},
-                        {'name': 'Number of Traders', 'id': 'Number of Traders'}
+                        {'name': 'Number of Traders', 'id': 'Number of Traders', 'presentation': 'markdown'},
+                    ],
+                    markdown_options={"html": True},
+                    style_header={
+                        'backgroundColor': 'rgb(230, 230, 230)',
+                        'fontWeight': 'bold',
+                        'whiteSpace': 'normal',
+                        'height': 'auto'
+                    },
+                    css=[
+                        {"selector": 'th[data-dash-column="Number of Traders"]',
+                         "rule": "white-space: normal;"},
+                        {"selector": 'th[data-dash-column="Number of Traders"] .column-header-name',
+                         "rule": "display: block;"},
+                        {"selector": 'th[data-dash-column="Number of Traders"]::after',
+                         "rule": (
+                                 "content: 'Long   Short   Spread';"
+                                 "display: block;"
+                                 "margin-top: 4px;"
+                                 "font-size: 11px;"
+                                 "color: #444;"
+                                 "line-height: 1.3;"
+                                 "padding-left: 18px;"
+                                 "word-spacing: 26px;"
+                                 "background-image: "
+                                 "radial-gradient(circle, #2ca02c 0, #2ca02c 100%),"
+                                 "radial-gradient(circle, #d62728 0, #d62728 100%),"
+                                 "radial-gradient(circle, #1f77b4 0, #1f77b4 100%);"
+                                 "background-repeat: no-repeat;"
+                                 "background-size: 10px 10px, 10px 10px, 10px 10px;"
+                "background-position: 2px 55%, 60px 55%, 120px 55%;"
+            )}
+                    ],
+                    style_cell_conditional=[
+                        {'if': {'column_id': 'Number of Traders'},
+                         'whiteSpace': 'normal', 'height': 'auto',
+                         'minWidth': '260px', 'width': '260px', 'maxWidth': '260px'}
                     ],
                     style_data_conditional=[
                         {
@@ -344,105 +453,354 @@ app.layout = html.Div([
                         'whiteSpace': 'normal',
                         'height': 'auto',
                     },
-                    style_header={
-                        'backgroundColor': 'rgb(230, 230, 230)',
-                        'fontWeight': 'bold'
-                    }
                 )
             ], width=12)
         ]),
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H2("Clustering Indicator"),
-                dcc.Graph(id='long-clustering-graph'),
-                html.Div([
+                html.H1("Clustering Indicator"),
+
+                dcc.Markdown(r"""
+               Der **Clustering Indicator** misst, wie viele Trader eine bestimmte Long- oder Short-Position halten, 
+               ausgedrückt als Prozentsatz aller Trader im Markt. Er ist damit ein Indikator für Marktstimmung und „Herdentrieb“.
                 
-            ], style={'marginTop': '10px'})
-            ], width=12),
-            dbc.Col([
-                html.H2("Clustering Indicator"),
+                Das **Ziel des Indikators** ist es, das Mass an „Crowding“ in einem Markt sichtbar zu machen - also wie viele 
+                Trader sich in dieselbe Richtung positionieren. Er ist unabhangig von der Positionsgrosse und passt sich dadurch gut an
+                regulatorische Beschränkungen wie Positionslimits oder Diversifikationsauflagen an.
+                
+                **Farbskala:** Die Farbe der Punkte zeigt den *Clustering-Wert in %*. Dieser Wert zeigt, wie
+                 stark sich Trader im Verhältnis zur historischen Bandbreite (ein Jahr) in einer Long- oder Short-Position 
+                 konzentrieren. Ein hoher Wert bedeutet also, dass sich besonders viele Trader in derselben Richtung
+                 positionieren.
+                """, mathjax=True),
+
+                dbc.Row([
+                    dbc.Col(dcc.Markdown(r"""
+                **Berechnung Long-Clustering:**
+
+                $$
+                \mathrm{Clustering}_{\mathrm{Long}}(\%) =
+                \frac{\mathrm{current}\;MMLT\% - \min\!\left(MMLT\%_{\mathrm{range}}\right)}
+                     {\max\!\left(MMLT\%_{\mathrm{range}}\right) - \min\!\left(MMLT\%_{\mathrm{range}}\right)}
+                $$
+                """, mathjax=True), width=12, lg=6),
+
+                    dbc.Col(dcc.Markdown(r"""
+                **Berechnung Short-Clustering:**
+
+                $$
+                \mathrm{Clustering}_{\mathrm{Short}}(\%) =
+                \frac{\mathrm{current}\;MMST\% - \min\!\left(MMST\%_{\mathrm{range}}\right)}
+                     {\max\!\left(MMST\%_{\mathrm{range}}\right) - \min\!\left(MMST\%_{\mathrm{range}}\right)}
+                $$
+                """, mathjax=True), width=12, lg=6),
+                ], className="mb-2"),
+
+                dcc.Markdown(r"""
+                wobei
+                $$
+                MML(S)T\%=\frac{MML(S)T\;(\mathrm{futures\ only})}{TTF\;(\mathrm{futures\ only})}
+                $$
+
+                <div style="text-align:center">\( \text{range} = \text{one-year rolling} \)</div>
+
+                **Bedeutung der Abkürzungen:**  
+                - **MML (S):** Managed Money Long (Short) Positionen  
+                - **T%:** Percentage distribution of positions  
+                - **TTF:** Total number of traders trading futures
+                """, mathjax=True, dangerously_allow_html=True),
+
+                dcc.Graph(id='long-clustering-graph'),
+                html.Div([], style={'marginTop': '10px'}),
                 dcc.Graph(id='short-clustering-graph'),
                 html.Br(),
-        html.H4("Formula for the Clustering Indicator:"),
-        html.Img(
-            src="/assets/clustering_formula.png",  # Bildpfad relativ zum Projekt
-            style={"width": "80%", "display": "block", "margin": "auto"}
-        ),
-        html.Img(
-            src="/assets/clustering.png",  # Bildpfad relativ zum Projekt
-            style={"width": "80%", "display": "block", "margin": "auto"}
-        ) ,
-        html.H4("Meaning of Shortcuts:"),
-        html.Ul([
-    html.Li(html.B("MML (S): Managed Money Long (Short) Positionen.")),
-    html.Li(html.B("T%: Percentage distribution of positions.")),
-    html.Li(html.B("TTF: Total number of traders trading futures.")),
-], style={"padding": "10px", "font-size": "16px", "line-height": "1.5"})
+            ], width=12)
+        ]),
 
-    ], width=12)
-]),
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H2("Position Size Indicator (Money Managers)"),
-                dcc.Graph(id='long-position-size-graph')
-            ], width=12),
-            dbc.Col([
-                html.H2("Position Size Indicator (Money Managers)"),
-                dcc.Graph(id='short-position-size-graph')
+                html.H1("Position Size Indicator")
             ], width=12)
         ]),
         dbc.Row([
-    dbc.Col([
-        html.Img(
-            src="/assets/position_size_formula.png",  # Bild aus dem assets-Ordner
-            style={"width": "80%", "display": "block", "margin": "0 auto"}  # Optional: Stil für zentrierte Anzeige
-        ),
-    html.H4("Meaning of Shortcuts:"),
-    html.Ul([
-        html.Li(html.B("MM: Managed Money.")),
-        html.Li(html.B("PMPU: Producer/Merchant/Processor/User.")),
-        html.Li(html.B("OR: Other Reportables.")),
-        html.Li(html.B("SD: Swap Dealer.")),
-        html.Li(html.B("L: Long positions.")),
-        html.Li(html.B("S: Short positions.")),
-    ], style={"padding": "10px", "font-size": "16px", "line-height": "1.5"})
-], width=12)
-    
-]),
+            dbc.Col(
+                dcc.Markdown(
+                    r"""
+        Der **Position Size Indicator** misst die durchschnittliche Grösse der Positionen einzelner Trader, 
+        indem die gesamte Positionsgrösse durch die Anzahl der beteiligten Trader geteilt wird. Dadurch wird sichtbar, 
+        wie stark die Überzeugung (*conviction*) innerhalb einer Tradergruppe ist.
+
+        Das **Ziel des Indikators** ist es, die durchschnittliche Positionsgrösse und damit die Intensität des Engagements von Tradern transparenter zu machen. 
+        Er kombiniert Daten zu *Open Interest* und *Traderanzahl*, um Rückschlüsse auf die Verteilung von Positionen entlang der Fälligkeiten 
+        (*down the curve*) zu ziehen. Zudem lassen sich über Positionslimits erkennen, wie stark Positionen konzentriert sind und welche 
+        Auswirkungen ein Abbau dieser Positionen auf Preise und Marktstruktur haben könnte.
+        
+        **Farbskala:** Die Punktfarbe zeigt die *durchschnittliche Positionsgrösse* in der jeweiligen Tradergruppe. 
+        Helle Farben = grössere Positionen pro Trader, dunkle Farben = kleinere Positionen.
+
+        **Berechnung:**
+
+        $$
+        \text{Position Size}_{\text{trader category}} =
+        \frac{\text{Open Interest}_{\text{trader category}}}
+        {\text{Number of Traders}_{\text{trader category}}}
+        $$
+
+        wobei
+        $$
+        \text{trader category} = \{\mathrm{MM}(L,S),\, \mathrm{PMPU}(L,S),\, \mathrm{OR}(L,S),\, \mathrm{SD}(L,S)\}
+        $$
+        
+        **Bedeutung der Abkürzungen:**
+        - **PMPU:** Producer/Merchant/Processor/User
+        - **SD:** Swap Dealer
+        - **MM:** Managed Money
+        - **OR:** Other Reportables
+        - **L:** Long Positionen
+        - **S:** Short Positionen
+        """,
+                    mathjax=True),
+        width=12)]),
+        dbc.Row([dbc.Col([html.H2("Producer/Merchant/Processor/User (PMPU)")], width=12)]),
+        dbc.Row([
+            dbc.Col([dcc.Graph(id='pmpu-long-position-size-graph')], width=12),
+            dbc.Col([dcc.Graph(id='pmpu-short-position-size-graph')], width=12),
+        ]),
+        dbc.Row([dbc.Col([html.H2("Swap Dealers")], width=12)]),
+        dbc.Row([
+            dbc.Col([dcc.Graph(id='sd-long-position-size-graph')], width=12),
+            dbc.Col([dcc.Graph(id='sd-short-position-size-graph')], width=12),
+        ]),
+        dbc.Row([dbc.Col([html.H2("Money Managers")], width=12)]),
+        dbc.Row([
+            dbc.Col([dcc.Graph(id='long-position-size-graph')], width=12),
+            dbc.Col([dcc.Graph(id='short-position-size-graph')], width=12),
+        ]),
+        dbc.Row([dbc.Col([html.H2("Other Reportables")], width=12)]),
+        dbc.Row([
+            dbc.Col([dcc.Graph(id='or-long-position-size-graph')], width=12),
+            dbc.Col([dcc.Graph(id='or-short-position-size-graph')], width=12),
+        ]),
+
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H2("Dry Powder Indicator"),
+                html.H1("Dry Powder Indicator"),
+
+                dcc.Markdown(r"""
+                **Dry Powder (DP)** ist eine Methode zur Visualisierung der Positionierung in Rohstoffmärkten. 
+                Dabei wird die Grösse der Long- und Short-Positionen (*Open Interest*) mit der Anzahl der Trader 
+                in einer bestimmten Gruppe (z. B. Money Managers) in Beziehung gesetzt.
+
+                Das Ziel der DP-Analyse ist es, einschätzen zu können, ob bestehende Positionen noch ausgebaut werden 
+                können oder ob sie anfällig für Liquidationen sind. DP-Indikatoren werden in Diagrammen dargestellt 
+                und können direkt als Handelssignale genutzt werden, um Marktchancen und Risiken besser zu bewerten.
+
+                Zudem ist die DP-Analyse sehr flexibel: Sie kann in verschiedenen Varianten angewandt werden, 
+                z. B. durch Umrechnung in Dollar-Exposures oder durch die Verwendung normalisierter Kennzahlen wie der *Concentration*.
+
+                **Berechnung:**
+
+                **Achsen (Zeitpunkt \(t\)):**  
+                - **x-Achse:** Anzahl der Trader in der jeweiligen Gruppe.  
+                - **y-Achse:** Größe der offenen Positionen (Open Interest).  
+
+                $$
+                x_{\mathrm{MML}}(t) = N_{\mathrm{MML}}(t), 
+                \qquad
+                x_{\mathrm{MMS}}(t) = N_{\mathrm{MMS}}(t)
+                $$
+
+                $$
+                y_{\mathrm{MML}}(t) = OI_{\mathrm{MML}}^{L}(t),
+                \qquad
+                y_{\mathrm{MMS}}(t) = OI_{\mathrm{MML}}^{S}(t)\;(\text{im Plot negativ})
+                $$
+
+                **Bubble-Größe:**  
+                Die Fläche der Bubbles zeigt, wie groß die Gesamtposition (Long + Short) im Verhältnis ist – je grösser die Bubble, desto mehr offene Kontrakte (Open Interest) liegen vor.
+
+                **Begriffe:**  
+                - $OI$ (*Open Interest*): Anzahl offener Kontrakte (Long bzw. Short) einer Gruppe zu einem Zeitpunkt.  
+                - $N_{\mathrm{MML}}, N_{\mathrm{MMS}}$: Anzahl Trader (Money Manager Long bzw. Short).  
+                - **Farbkodierung:** Dunkelblau = MML-Wolke (Long-Seite), Hellblau = MMS-Wolke (Short-Seite).  
+                - **Schwarzer Punkt:** jeweils die **aktuellste Woche**.
+                """, mathjax=True),
+
                 dcc.Graph(id='dry-powder-indicator-graph')
             ], width=12)
         ]),
+
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H2("DP Relative Concentration Indicator"),
+                html.H1("DP Relative Concentration Indicator"),
+
+                dcc.Markdown(r"""
+                Der **Dry Powder Relative Concentration Indicator (DP Relative Concentration)** normalisiert Positionen 
+                anhand des Open Interest und stellt die Konzentration der Tradergruppen dar. Dadurch lassen sich verschiedene Märkte 
+                oder Tradergruppen innerhalb eines Marktes direkt vergleichen.
+
+                Das Ziel des Indikators ist es, die Positionierungsprofile von Märkten vollständig zu visualisieren und Unterschiede 
+                sichtbar zu machen – etwa zwischen verwandten Rohstoffen wie Mais und Sojabohnen oder zwischen WTI und Brent. 
+                Dadurch können Rückschlüsse auf zukünftige Marktbewegungen, Hedging-Verhalten und potenzielle Spreadausweitungen 
+                gezogen werden.
+
+                **Berechnung:**
+
+                **Achsen (Zeitpunkt \(t\)):**  
+                - **x-Achse:** Anzahl Trader in der jeweiligen Gruppe (Long oder Short).  
+                - **y-Achse:** Relative Concentration \(RC_G(t)\), d. h. die Nettopositionierung der Gruppe \(G\) relativ zum gesamten Open Interest.  
+
+                $$
+                x_G(t) = N_G(t),
+                \qquad
+                y_G(t) = RC_G(t)
+                $$
+
+                mit
+
+                $$
+                RC_G(t) = 100 \cdot \sigma_G \left( \frac{L_G(t)}{OI(t)} - \frac{S_G(t)}{OI(t)} \right)
+                $$
+
+                wobei  
+                - $L_G(t)$: Long Open Interest der Gruppe \(G\)  
+                - $S_G(t)$: Short Open Interest der Gruppe \(G\)  
+                - $OI(t)$: Gesamtes Open Interest zum Zeitpunkt \(t\)  
+                - $N_G(t)$: Anzahl Trader (Long oder Short) der Gruppe \(G\)  
+                - $\sigma_G = +1$ für Long-Serien (MML, ORL, PMPUL, SDL),  
+                  $\sigma_G = -1$ für Short-Serien (MMS, ORS, PMPUS, SDS)
+
+                **Begriffe:**  
+                - $OI$ (*Open Interest*): Anzahl aller offenen Kontrakte.  
+                - $N_G$: Anzahl Trader in Gruppe \(G\).  
+                - $RC_G(t)$: Relative Concentration (in Prozentpunkten) einer Gruppe.  
+                - **Schwarzer Punkt:** markiert den Wert der **aktuellsten Woche** je Tradergruppe.
+                """, mathjax=True),
+
                 dcc.Graph(id='dp-relative-concentration-graph')
             ], width=12)
         ]),
+
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H2("DP Seasonal Indicator"),
+                html.H1("DP Seasonal Indicator"),
+
+                dcc.Markdown(r"""
+                **Dry Powder Seasonal Indicators** sind spezielle DP-Indikatoren, die saisonale Muster im Traderverhalten 
+                sichtbar machen. Dabei werden Positionen nicht nur nach Grösse und Anzahl der Trader, sondern zusätzlich 
+                nach Zeitabschnitten (z. B. Monate oder Quartale) dargestellt.
+
+                Das Ziel dieser Indikatoren ist es, saisonale Hedging-Muster oder Abweichungen davon zu erkennen. 
+                So lassen sich etwa typische Verhaltensweisen von Produzenten oder Konsumenten in bestimmten Jahreszeiten 
+                aufzeigen (z. B. stärkere Hedging-Aktivität im Winter bei Heizöl). Gleichzeitig helfen sie, potenzielle 
+                Anomalien oder Unterabsicherungen zu identifizieren, die ein Risiko für Preisbewegungen darstellen könnten.
+                
+                **Berechnung:**
+
+                $$
+                x_q(t) = N_q(t), \qquad y_q(t) = RC_q(t)
+                $$
+                
+                wobei  
+                
+                - $N_q(t)$: Anzahl der Trader im Quartal \(q\) zum Zeitpunkt \(t\).  
+                - $RC_q(t)$: *Relative Concentration* der Tradergruppe im Quartal \(q\).  
+                """, mathjax=True),
+
                 dcc.Graph(id='dp-seasonal-indicator-graph')
             ], width=12)
         ]),
+
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H2("DP Net Indicators with Medians"),
+                html.H1("DP Net Indicators with Medians"),
+
+                dcc.Markdown(r"""
+                **Dry Powder Net Indicators** kombinieren Informationen zu Netto-Open-Interest und Netto-Anzahl von Tradern. 
+                Dadurch lassen sich Abweichungen zwischen Positionsgrösse und Traderanzahl sichtbar machen, die Hinweise 
+                auf mögliche Wendepunkte im Markt geben können.
+
+                Das Ziel dieser Indikatoren ist es, ein klareres Bild der Netto-Positionierung zu liefern und Extremwerte 
+                besser einzuordnen. So können Situationen erkannt werden, in denen z. B. das Open Interest eine Long-Position 
+                zeigt, die Mehrheit der Trader aber Short positioniert ist. Zudem lassen sich auch Spread-Positionen analysieren, 
+                um einzuschätzen, ob diese sich in extremeren Marktphasen (z. B. Contango oder Backwardation) verstärken könnten.
+
+                **Berechnung**
+
+                **Achsen (Zeitpunkt \(t\)):**  
+                - **x-Achse:** Netto-Anzahl Money-Manager-Trader.  
+                - **y-Achse:** Netto-Open-Interest der Money Manager.
+                
+                $$
+                x(t)=N^{\text{Net}}(t)=N^{\text{Long}}(t)-N^{\text{Short}}(t),
+                \qquad
+                y(t)=OI^{\text{Net}}(t)=OI^{\text{Long}}(t)-OI^{\text{Short}}(t)
+                $$
+                
+                **Medians (gestrichelte Referenzlinien):**
+                $$
+                \widetilde{N}^{\text{Net}}=\operatorname{Median}_t\!\big(N^{\text{Net}}(t)\big),
+                \qquad
+                \widetilde{OI}^{\text{Net}}=\operatorname{Median}_t\!\big(OI^{\text{Net}}(t)\big)
+                $$
+                
+                **Variablen (mit Datenbezug):**
+                - $t$: Kalenderwoche/Beobachtungszeitpunkt innerhalb des gewählten Datumsbereichs.  
+                - $N^{\text{Long}}(t)$: Anzahl **Long-Trader (MM)** zum Zeitpunkt $t$  
+                - $N^{\text{Short}}(t)$: Anzahl **Short-Trader (MM)** zum Zeitpunkt $t$  
+                - $N^{\text{Net}}(t)$: **Netto-Traderzahl** $=\;N^{\text{Long}}(t)-N^{\text{Short}}(t)$
+                - $OI^{\text{Long}}(t)$: **Long-Open-Interest (MM)** zum Zeitpunkt $t$  
+                - $OI^{\text{Short}}(t)$: **Short-Open-Interest (MM)** zum Zeitpunkt $t$  
+                - $OI^{\text{Net}}(t)$: **Netto-Open-Interest** $=\;OI^{\text{Long}}(t)-OI^{\text{Short}}(t)$
+                """, mathjax=True),
+
                 dcc.Graph(id='dp-net-indicators-graph')
             ], width=12)
         ]),
+
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H2("Dry Powder Position Size Indicator"),
+                html.H1("Dry Powder Position Size Indicator"),
+
+                dcc.Markdown(r"""
+                Der **Dry Powder Position Size Indicator** verknüpft die durchschnittliche Positionsgrösse von Tradern 
+                mit der Preisentwicklung eines Rohstoffs. Dabei wird die Positionsgrösse (y-Achse) gegen die Anzahl der Trader 
+                (x-Achse) dargestellt, wobei die Farben die jeweilige Preisrange markieren.
+
+                Das Ziel dieses Indikators ist es, Zusammenhänge zwischen Positionsgrössen und Marktpreisen sichtbar zu machen. 
+                So lassen sich Muster erkennen, etwa dass Long-Trader bei tieferen Preisen grössere Positionen halten 
+                (stärkeres Engagement), während bei höheren Preisen die Traderzahl sinkt. Auf der Short-Seite hingegen treten 
+                oft uneinheitlichere Muster auf, was auf unterschiedliche Handelsstrategien wie Spread- oder 
+                Relative-Value-Trading hinweist.
+
+                Insgesamt hilft der Indikator, Unterschiede im Verhalten von Long- und Short-Tradern zu analysieren 
+                und Rückschlüsse auf ihre Handelsmotive (z. B. direktional vs. relative Value) zu ziehen.
+
+                **Berechnung und Variablen:**
+
+                Achsen:
+                $$
+                x_g(t)=N_g(t), \qquad y_g(t)=\mathrm{PS}_g(t)
+                $$
+                - $N_g(t)$: Anzahl der Trader einer Gruppe $g$ zum Zeitpunkt $t$  
+                - $\mathrm{PS}_g(t)$: durchschnittliche Positionsgrösse je Trader einer Gruppe $g$ zum Zeitpunkt $t$
+
+                Farbcodierung:
+                $$
+                \text{color}_g(t)\;\propto\;\mathrm{OI}_g(t)
+                $$
+                - $\mathrm{OI}_g(t)$: Open Interest zum Zeitpunkt $t$, d. h. die gesamte Anzahl offener Kontrakte.  
+                - Die **Farbe eines Punktes** zeigt somit an, wie hoch das Open Interest in der jeweiligen Woche war 
+                  (je heller/gelber, desto höher das Open Interest).
+                """, mathjax=True),
+
                 dcc.RadioItems(
                     id='mm-radio',
                     options=[
@@ -455,10 +813,53 @@ app.layout = html.Div([
                 dcc.Graph(id='dp-position-size-indicator')
             ], width=12)
         ]),
+
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H2("Dry Powder Hedging Indicator"),
+                html.H1("Dry Powder Hedging Indicator"),
+
+                dcc.Markdown(r"""
+                **Dry Powder Hedging Indicators** erweitern die klassische DP-Analyse, indem sie mehrere Tradergruppen 
+                gleichzeitig betrachten – typischerweise Money Manager (MM) und Produzenten/Verbraucher (PMPU). 
+                So wird sichtbar, wie viel „Dry Powder“ (Spielraum für zusätzliche Positionen) eine Gruppe im Verhältnis 
+                zu einer anderen noch hat.
+
+                Das Ziel dieser Indikatoren ist es, ein vollständigeres Bild der Marktpositionierung zu geben und besser 
+                einzuschätzen, ob Preise noch weiter steigen oder fallen können. Besonders die PMPU-Gruppe 
+                (Produzenten und Konsumenten) liefert wertvolle Hinweise, da deren Hedging-Verhalten oft eine starke 
+                Verbindung zur physischen Marktlage hat.
+
+                 **Berechnung:**
+
+                x-Achse (Traderzahl):
+                $$
+                x \;=\; \#\;\text{MM Trader (Long oder Short)}
+                $$
+                - Anzahl der aktiven Money Manager Trader in Long- oder Short-Positionen
+
+                y-Achse (Positionsgröße):
+                $$
+                y \;=\; \text{MM (Long oder Short) Open Interest}
+                $$
+                - gesamtes Open Interest (offene Kontrakte) der Money Manager in Long- oder Short-Positionen
+
+                Farbcodierung (Hedging-Kraft der PMPU):
+                $$
+                \text{Color}
+                \;=\;
+                \frac{\;\text{PMPU(L/S) OI}_{\text{current}} - \min\!\big(\text{PMPU(L/S) OI}_{\text{range}}\big)\;}
+                     {\max\!\big(\text{PMPU(L/S) OI}_{\text{range}}\big) - \min\!\big(\text{PMPU(L/S) OI}_{\text{range}}\big)}
+                $$
+                - normiertes Open Interest der Produzenten/Verbraucher (PMPU), 
+                  zeigt die aktuelle Position im Vergleich zu ihrem historischen Minimum und Maximum  
+                - **PMPU(L/S)** bezeichnet je nach Auswahl Long (PMPUL) oder Short (PMPUS)
+
+                **Weitere Visualisierungselemente:**
+                - **Größe der Bubbles:** proportional zum gesamten Open Interest (Marktliquidität bzw. Marktgewicht)  
+                - **Farbe der Bubbles:** zeigt die relative Stärke/Positionierung der PMPU-Gruppe im beobachteten Zeitraum
+                """, mathjax=True),
+
                 dcc.RadioItems(
                     id='trader-group-radio',
                     options=[
@@ -471,10 +872,96 @@ app.layout = html.Div([
                 dcc.Graph(id='hedging-indicator-graph')
             ], width=12)
         ]),
+
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
                 html.H2("Dry Powder Concentration/Clustering Indicator"),
+
+                dcc.Markdown(r"""
+                Der **Dry Powder Concentration/Clustering Indicator** kombiniert die Konzepte von Konzentration 
+                (Open Interest-Anteil) und Clustering (Anzahl Trader) in einem DP-Chart. Er zeigt, wie extrem die 
+                Positionierung einer Tradergruppe im Vergleich zu ihrer historischen Spanne ist.
+
+                Das Ziel des Indikators ist es, relative Handelschancen zwischen ähnlichen Märkten oder Rohstoffen 
+                aufzuzeigen, indem Positionierungsunterschiede sichtbar gemacht werden. Befinden sich z. B. beide 
+                Kennzahlen in einem Extrembereich, steigt die Wahrscheinlichkeit, dass ein Markt im Falle eines 
+                Preisschocks stärker reagiert als ein anderer.
+                
+                **Berechnung:**
+
+                **1) Clustering (je Zeitpunkt $t$)**
+                
+                Rohanteil der Trader (Gruppe $g$ in Markt $m$):  
+                $
+                \mathrm{ClustShare}^{\text{raw}}_g(m,t)=\frac{T_g(m,t)}{TT_F(m,t)}
+                $
+                
+                Rolling-Normierung über ein Jahr (historische Spanne je Markt – „one-year rolling“):  
+                $
+                \mathrm{ClustShare}^{\text{roll}}_g(m,t)
+                =\frac{\mathrm{ClustShare}^{\text{raw}}_g(m,t)-\min_{\tau\in\mathcal{W}_{365}}\mathrm{ClustShare}^{\text{raw}}_g(m,\tau)}
+                {\max_{\tau\in\mathcal{W}_{365}}\mathrm{ClustShare}^{\text{raw}}_g(m,\tau)-\min_{\tau\in\mathcal{W}_{365}}\mathrm{ClustShare}^{\text{raw}}_g(m,\tau)}\cdot100
+                $
+                
+                **Zeitliche Aggregation** im gewählten Fenster $[t_0,t_1]$:  
+                $
+                \overline{\mathrm{ClustShare}}^{\text{roll}}_g(m)
+                =\frac{1}{|[t_0,t_1]|}\sum_{t=t_0}^{t_1}\mathrm{ClustShare}^{\text{roll}}_g(m,t)
+                $
+                
+                **2) Concentration (je Zeitpunkt $t$)**
+                
+                Relative Concentration als **Netto-Kontrakte** (Long minus Short):  
+                $
+                \mathrm{RelConc}^{\text{raw}}_g(m,t)=OI^{L}_g(m,t)-OI^{S}_g(m,t)
+                $
+                
+                **Zeitliche Aggregation** im Fenster $[t_0,t_1]$:  
+                $
+                \overline{\mathrm{RelConc}}^{\text{raw}}_g(m)
+                =\frac{1}{|[t_0,t_1]|}\sum_{t=t_0}^{t_1}\mathrm{RelConc}^{\text{raw}}_g(m,t)
+                $
+                
+                **3) Range-Normalisierung über alle Märkte (0–100)**
+                
+                $
+                \mathrm{ClusteringRange}_g(m)=
+                \frac{\overline{\mathrm{ClustShare}}^{\text{roll}}_g(m)-\min_{m'}\overline{\mathrm{ClustShare}}^{\text{roll}}_g(m')}
+                {\max_{m'}\overline{\mathrm{ClustShare}}^{\text{roll}}_g(m')-\min_{m'}\overline{\mathrm{ClustShare}}^{\text{roll}}_g(m')}\cdot100
+                $
+                
+                $
+                \mathrm{ConcentrationRange}_g(m)=
+                \frac{\overline{\mathrm{RelConc}}^{\text{raw}}_g(m)-\min_{m'}\overline{\mathrm{RelConc}}^{\text{raw}}_g(m')}
+                {\max_{m'}\overline{\mathrm{RelConc}}^{\text{raw}}_g(m')-\min_{m'}\overline{\mathrm{RelConc}}^{\text{raw}}_g(m')}\cdot100
+                $
+                
+                **4) Punkte im Plot (je Markt $m$)**
+                
+                $
+                x_m=\mathrm{ClusteringRange}_g(m),\qquad
+                y_m=\mathrm{ConcentrationRange}_g(m)
+                $
+                
+                **Variablen & Bedeutungen**
+                
+                - $g$: Tradergruppe (z. B. MML/MMS).  
+                - $m$: Markt/Rohstoff (z. B. Gold, Copper).  
+                - $t$: Woche (Report Date).  
+                - $T_g(m,t)$: Anzahl Trader der Gruppe $g$.  
+                - $TT_F(m,t)$: Gesamtzahl **aller** Futures-Trader im Markt.  
+                - $OI^L_g, OI^S_g$: Long- bzw. Short-Open-Interest (Kontrakte) der Gruppe $g$.  
+                - $\mathcal{W}_{365}$: rollendes 1-Jahres-Fenster zur historischen Min-Max-Normierung.  
+                - Range-Normalisierung: lineares Min-Max-Scaling **über Märkte** (macht die Werte vergleichbar auf 0–100).
+                
+                **Interpretation**
+                
+                - **Clustering hoch ($x$ nahe 100)**: Im Vergleich zu Historie & anderen Märkten stark von Gruppe $g$ „gecrowded“.  
+                - **Concentration hoch ($y$ nahe 100)**: Markt zeigt (nach Zeitglättung) einen hohen Netto-Kontrakt-Überhang zugunsten der Gruppe $g$.  
+                - **Oben rechts** (hoch/hoch): doppelt extrem → Markt tendiert bei Schocks zu stärkeren Moves; **unten links**: unauffällig.
+                """, mathjax=True),
+
                 dcc.DatePickerRange(
                     id='concentration-clustering-date-picker-range',
                     start_date=default_start_date,
@@ -495,6 +982,7 @@ app.layout = html.Div([
                 dcc.Graph(id='dp-concentration-clustering-graph')
             ], width=12)
         ]),
+
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
@@ -503,6 +991,35 @@ app.layout = html.Div([
         ])
     ], fluid=True)
 ])
+
+def traders_bar(long_val, short_val, spread_val=None, bar_width_px=220, height_px=14):
+    lv = 0 if pd.isna(long_val) else float(long_val)
+    sv = 0 if pd.isna(short_val) else float(short_val)
+    tv = 0 if (spread_val is None or pd.isna(spread_val)) else float(spread_val)
+    total = lv + sv + tv
+
+    if total <= 0:
+        return f"<div style='width:{bar_width_px}px;height:{height_px}px;border:1px solid #ccc;border-radius:3px;'></div>"
+
+    p_long  = 100 * lv / total
+    p_short = 100 * sv / total
+    p_spread = 100 * tv / total
+
+    spread_div = f"<div title='Spread: {int(tv)}' style='width:{p_spread:.2f}%;background:#1f77b4;'></div>" if tv > 0 else ""
+    spread_txt = f", <b>Spread:</b> {int(tv)}" if tv > 0 else ""
+
+    return (
+        f"<div style='width:{bar_width_px}px;display:flex;flex-direction:column;'>"
+        f"  <div style='display:flex;width:100%;height:{height_px}px;border:1px solid #ccc;border-radius:3px;overflow:hidden;'>"
+        f"    <div title='Long: {int(lv)}'  style='width:{p_long:.2f}%;background:#2ca02c;'></div>"
+        f"    <div title='Short: {int(sv)}' style='width:{p_short:.2f}%;background:#d62728;'></div>"
+        f"    {spread_div}"
+        f"  </div>"
+        f"  <div style='font-size:11px;margin-top:4px;font-family:\"Courier New\", Courier, monospace;'>"
+        f"    <b>Long:</b> {int(lv)}, <b>Short:</b> {int(sv)}{spread_txt}"
+        f"  </div>"
+        f"</div>"
+    )
 
 # Callback to update the table
 @app.callback(
@@ -566,6 +1083,14 @@ def update_table(selected_market, start_date, end_date):
             round(((current_row['Managed Money Spread'] - first_row['Managed Money Spread']) / first_row['Managed Money Spread']) * 100, 2),
             round(((current_row['Other Reportables Spread'] - first_row['Other Reportables Spread']) / first_row['Other Reportables Spread']) * 100, 2)
         ],
+        'Total Traders': [
+            current_row['Traders Prod/Merc Long'] + current_row['Traders Prod/Merc Short'],
+            current_row['Traders Swap Long'] + current_row['Traders Swap Short'] + current_row['Traders Swap Spread'],
+            current_row['Traders M Money Long'] + current_row['Traders M Money Short'] + current_row[
+                'Traders M Money Spread'],
+            current_row['Traders Other Rept Long'] + current_row['Traders Other Rept Short'] + current_row[
+                'Traders Other Rept Spread']
+        ],
         '% of Traders': [
             f"Long: {round(current_row['Traders Prod/Merc Long'] / current_row['Total Number of Traders'] * 100, 2)}%, Short: {round(current_row['Traders Prod/Merc Short'] / current_row['Total Number of Traders'] * 100, 2)}%",
             f"Long: {round(current_row['Traders Swap Long'] / current_row['Total Number of Traders'] * 100, 2)}%, Short: {round(current_row['Traders Swap Short'] / current_row['Total Number of Traders'] * 100, 2)}%, Spread: {round(current_row['Traders Swap Spread'] / current_row['Total Number of Traders'] * 100, 2)}%",
@@ -573,40 +1098,257 @@ def update_table(selected_market, start_date, end_date):
             f"Long: {round(current_row['Traders Other Rept Long'] / current_row['Total Number of Traders'] * 100, 2)}%, Short: {round(current_row['Traders Other Rept Short'] / current_row['Total Number of Traders'] * 100, 2)}%, Spread: {round(current_row['Traders Other Rept Spread'] / current_row['Total Number of Traders'] * 100, 2)}%"
         ],
         'Number of Traders': [
-            f"Long: {current_row['Traders Prod/Merc Long']}, Short: {current_row['Traders Prod/Merc Short']}",
-            f"Long: {current_row['Traders Swap Long']}, Short: {current_row['Traders Swap Short']}, Spread: {current_row['Traders Swap Spread']}",
-            f"Long: {current_row['Traders M Money Long']}, Short: {current_row['Traders M Money Short']}, Spread: {current_row['Traders M Money Spread']}",
-            f"Long: {current_row['Traders Other Rept Long']}, Short: {current_row['Traders Other Rept Short']}, Spread: {current_row['Traders Other Rept Spread']}"
-        ]
+            traders_bar(current_row['Traders Prod/Merc Long'],  current_row['Traders Prod/Merc Short'],  None),
+            traders_bar(current_row['Traders Swap Long'],       current_row['Traders Swap Short'],       current_row['Traders Swap Spread']),
+            traders_bar(current_row['Traders M Money Long'],    current_row['Traders M Money Short'],    current_row['Traders M Money Spread']),
+            traders_bar(current_row['Traders Other Rept Long'], current_row['Traders Other Rept Short'], current_row['Traders Other Rept Spread'])
+        ],
     }
 
     return pd.DataFrame(data).to_dict('records')
 
 # Callback to update graphs based on selected market and date range
 @app.callback(
-    [Output('long-clustering-graph', 'figure'),
-     Output('short-clustering-graph', 'figure'),
-     Output('long-position-size-graph', 'figure'),
-     Output('short-position-size-graph', 'figure'),
-     Output('dry-powder-indicator-graph', 'figure'),
-     Output('dp-relative-concentration-graph', 'figure'),
-     Output('dp-seasonal-indicator-graph', 'figure'),
-     Output('dp-net-indicators-graph', 'figure'),
-     Output('dp-position-size-indicator', 'figure'),
-     Output('hedging-indicator-graph', 'figure')],
+    [
+        Output('long-clustering-graph', 'figure'),
+        Output('short-clustering-graph', 'figure'),
+        Output('pmpu-long-position-size-graph', 'figure'),
+        Output('pmpu-short-position-size-graph', 'figure'),
+        Output('sd-long-position-size-graph', 'figure'),
+        Output('sd-short-position-size-graph', 'figure'),
+        Output('long-position-size-graph', 'figure'),
+        Output('short-position-size-graph', 'figure'),
+        Output('or-long-position-size-graph', 'figure'),
+        Output('or-short-position-size-graph', 'figure'),
+        Output('dry-powder-indicator-graph', 'figure'),
+        Output('dp-relative-concentration-graph', 'figure'),
+        Output('dp-seasonal-indicator-graph', 'figure'),
+        Output('dp-net-indicators-graph', 'figure'),
+        Output('dp-position-size-indicator', 'figure'),
+        Output('hedging-indicator-graph', 'figure')
+    ],
     [Input('market-dropdown', 'value'),
      Input('date-picker-range', 'start_date'),
      Input('date-picker-range', 'end_date'),
      Input('mm-radio', 'value'),
      Input('trader-group-radio', 'value')]
 )
+
 def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
     filtered_df = df_pivoted[(df_pivoted['Market Names'] == selected_market) &
                              (df_pivoted['Date'] >= start_date) & 
                              (df_pivoted['Date'] <= end_date)]
 
+    # PMPU Long Position Size Indicator
+    pmpu_long_position_size_fig = go.Figure()
+    pmpu_long_position_size_fig.add_trace(go.Scatter(
+        x=filtered_df['Date'],
+        y=filtered_df['Open Interest'],
+        mode='markers',
+        marker=dict(
+            size=safe_sizes(filtered_df['PMPUL Position Size']),
+            color=safe_colors(filtered_df['PMPUL Position Size']),
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(
+                title="PMPU Long Position Size",
+                thickness=15,
+                len=0.75,
+                yanchor='middle',
+                y=0.5
+            )
+        ),
+        text=[f"PMPU Long Pos Size: {v:.0f}" for v in filtered_df['PMPUL Position Size'].fillna(0)],
+        hoverinfo='text',
+        showlegend=False
+    ))
+
+    # Bubble-Size-Legende
+    bubble_sizes = dynamic_bubble_sizes(filtered_df['PMPUL Position Size'])
+
+    for s in bubble_sizes:
+        pmpu_long_position_size_fig.add_trace(go.Scatter(
+            x=[0], y=[0],  # real point so sizing is honored
+            mode='markers',
+            visible='legendonly',  # only show in legend (not on plot)
+            marker=dict(
+                size=safe_sizes(pd.Series([s])).iat[0],  # pixel size
+                color='gray',
+                opacity=0.6
+            ),
+            showlegend=True,
+            name=f"{s} Traders",
+            hoverinfo='skip'
+        ))
+
+    pmpu_long_position_size_fig.update_layout(
+        title='Long Position Size Indicator (PMPU)',
+        xaxis_title='Date',
+        yaxis_title='Open Interest',
+        xaxis=dict(
+            tickmode='array',
+            tickvals=filtered_df['Date'].dt.year.unique(),
+            ticktext=[str(year) for year in filtered_df['Date'].dt.year.unique()],
+            showgrid=True, ticks="outside", tickangle=45
+        ),
+        yaxis=dict(
+            title='Open Interest', showgrid=True, tick0=0,
+            dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000
+        ),
+        legend=dict(
+            title=dict(text="Number of Traders"),
+            itemsizing='trace',  # ensure legend respects trace marker sizes
+            x=1.2, y=0.5,
+            font=dict(size=12)
+        )
+    )
+    add_last_point_highlight(
+        fig=pmpu_long_position_size_fig,
+        df=filtered_df, x_col='Date', y_col='Open Interest',
+        inner_size=2, inner_color='black'
+    )
+
+    # PMPU Short Position Size Indicator
+    pmpu_short_position_size_fig = go.Figure()
+    pmpu_short_position_size_fig.add_trace(go.Scatter(
+        x=filtered_df['Date'],
+        y=filtered_df['Open Interest'],
+        mode='markers',
+        marker=dict(
+            size=safe_sizes(filtered_df['PMPUS Position Size']),
+            color=safe_colors(filtered_df['PMPUS Position Size']),
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(
+                title="PMPU Short Position Size",
+                thickness=15,
+                len=0.75,
+                yanchor='middle',
+                y=0.5
+            )
+        ),
+        text=[f"PMPU Short Pos Size: {v:.0f}" for v in filtered_df['PMPUS Position Size'].fillna(0)],
+        hoverinfo='text',
+        showlegend=False
+    ))
+
+    bubble_sizes = dynamic_bubble_sizes(filtered_df['PMPUS Position Size'])
+    for s in bubble_sizes:
+        pmpu_short_position_size_fig.add_trace(go.Scatter(
+            x=[0], y=[0], mode='markers', visible='legendonly',
+            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
+            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
+        ))
+
+    pmpu_short_position_size_fig.update_layout(
+        title='Short Position Size Indicator (PMPU)',
+        xaxis_title='Date',
+        yaxis_title='Open Interest',
+        xaxis=dict(
+            tickmode='array',
+            tickvals=filtered_df['Date'].dt.year.unique(),
+            ticktext=[str(year) for year in filtered_df['Date'].dt.year.unique()],
+            showgrid=True, ticks="outside", tickangle=45
+        ),
+        yaxis=dict(
+            title='Open Interest', showgrid=True, tick0=0,
+            dtick=50000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000
+        ),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
+    )
+    add_last_point_highlight(
+        fig=pmpu_short_position_size_fig,
+        df=filtered_df, x_col='Date', y_col='Open Interest',
+        inner_size=2, inner_color='black'
+    )
+
+    # SD Long Position Size Indicator
+    sd_long_position_size_fig = go.Figure()
+    sd_long_position_size_fig.add_trace(go.Scatter(
+        x=filtered_df['Date'],
+        y=filtered_df['Open Interest'],
+        mode='markers',
+        marker=dict(
+            size=safe_sizes(filtered_df['SDL Position Size']),
+            color=safe_colors(filtered_df['SDL Position Size']),
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(
+                title="SD Long Position Size",
+                thickness=15, len=0.75, yanchor='middle', y=0.5
+            )
+        ),
+        text=[f"SD Long Pos Size: {v:.0f}" for v in filtered_df['SDL Position Size'].fillna(0)],
+        hoverinfo='text',
+        showlegend=False
+    ))
+    # Bubble-Size-Legende SD Long
+    bubble_sizes = dynamic_bubble_sizes(filtered_df['SDL Position Size'])
+    for s in bubble_sizes:
+        sd_long_position_size_fig.add_trace(go.Scatter(
+            x=[0], y=[0], mode='markers', visible='legendonly',
+            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
+            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
+        ))
+    sd_long_position_size_fig.update_layout(
+        title='Long Position Size Indicator (Swap Dealers)',
+        xaxis_title='Date', yaxis_title='Open Interest',
+        xaxis=dict(
+            tickmode='array',
+            tickvals=filtered_df['Date'].dt.year.unique(),
+            ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
+            showgrid=True, ticks="outside", tickangle=45
+        ),
+        yaxis=dict(title='Open Interest', showgrid=True, tick0=0),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
+    )
+    add_last_point_highlight(sd_long_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
+                             inner_color='black')
+
+    # SD Short Position Size Indicator
+    sd_short_position_size_fig = go.Figure()
+    sd_short_position_size_fig.add_trace(go.Scatter(
+        x=filtered_df['Date'],
+        y=filtered_df['Open Interest'],
+        mode='markers',
+        marker=dict(
+            size=safe_sizes(filtered_df['SDS Position Size']),
+            color=safe_colors(filtered_df['SDS Position Size']),
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(
+                title="SD Short Position Size",
+                thickness=15, len=0.75, yanchor='middle', y=0.5
+            )
+        ),
+        text=[f"SD Short Pos Size: {v:.0f}" for v in filtered_df['SDS Position Size'].fillna(0)],
+        hoverinfo='text',
+        showlegend=False
+    ))
+    bubble_sizes = dynamic_bubble_sizes(filtered_df['SDS Position Size'])
+    for s in bubble_sizes:
+        sd_short_position_size_fig.add_trace(go.Scatter(
+            x=[0], y=[0], mode='markers', visible='legendonly',
+            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
+            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
+        ))
+    sd_short_position_size_fig.update_layout(
+        title='Short Position Size Indicator (Swap Dealers)',
+        xaxis_title='Date', yaxis_title='Open Interest',
+        xaxis=dict(
+            tickmode='array',
+            tickvals=filtered_df['Date'].dt.year.unique(),
+            ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
+            showgrid=True, ticks="outside", tickangle=45
+        ),
+        yaxis=dict(title='Open Interest', showgrid=True, tick0=0),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
+    )
+    add_last_point_highlight(sd_short_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
+                             inner_color='black')
+
     long_scaling_factor, short_scaling_factor = calculate_scaling_factors(filtered_df)
-    
+
     # Long Positions Clustering
     long_clustering_fig = go.Figure()
 
@@ -641,7 +1383,7 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
 ))
 
 # Add bubble size legend
-    bubble_sizes = [50, 100, 150]  
+    bubble_sizes = [50, 100, 150]
     for size in bubble_sizes:
         long_clustering_fig.add_trace(go.Scatter(
         x=[None], y=[None],
@@ -655,8 +1397,6 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
         showlegend=True,
         name=f"{size} Traders"  # Label for the legend
     ))
-
-    
 
 # Update layout
     long_clustering_fig.update_layout(
@@ -690,10 +1430,10 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
             xref='paper',
             yref='paper',
             text=(
-                "Die Punktgröße im Scatterplot <br>zeigt die Anzahl der Trader:<br>"
+                "Die Punktgrösse im Scatterplot <br>zeigt die Anzahl der Trader:<br>"
                 "- ≤ 50 Trader: Kleinere Punkte<br>"
                 "- 51–100 Trader: Mittlere Punkte<br>"
-                "- 101–150 Trader: Größte Punkte"
+                "- 101–150 Trader: Grösste Punkte"
             ),
             showarrow=False,
             align="left",
@@ -715,9 +1455,6 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
     inner_color='black'
 )
 
-
-
-    
     # Short Positions Clustering
     short_clustering_fig = go.Figure()
 
@@ -797,395 +1534,400 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
     inner_color='black'
 )
 
-    # Long Position Size Indicator
-    long_position_size_fig = go.Figure()
+    # OR Long Position Size Indicator
+    or_long_position_size_fig = go.Figure()
+    or_long_position_size_fig.add_trace(go.Scatter(
+        x=filtered_df['Date'],
+        y=filtered_df['Open Interest'],
+        mode='markers',
+        marker=dict(
+            size=safe_sizes(filtered_df['ORL Position Size']),
+            color=safe_colors(filtered_df['ORL Position Size']),
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(
+                title="OR Long Position Size",
+                thickness=15, len=0.75, yanchor='middle', y=0.5
+            )
+        ),
+        text=[f"OR Long Pos Size: {v:.0f}" for v in filtered_df['ORL Position Size'].fillna(0)],
+        hoverinfo='text',
+        showlegend=False
+    ))
+    bubble_sizes = dynamic_bubble_sizes(filtered_df['ORL Position Size'])
+    for s in bubble_sizes:
+        or_long_position_size_fig.add_trace(go.Scatter(
+            x=[0], y=[0], mode='markers', visible='legendonly',
+            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
+            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
+        ))
+    or_long_position_size_fig.update_layout(
+        title='Long Position Size Indicator (Other Reportables)',
+        xaxis_title='Date', yaxis_title='Open Interest',
+        xaxis=dict(
+            tickmode='array',
+            tickvals=filtered_df['Date'].dt.year.unique(),
+            ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
+            showgrid=True, ticks="outside", tickangle=45
+        ),
+        yaxis=dict(title='Open Interest', showgrid=True, tick0=0),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
+    )
+    add_last_point_highlight(or_long_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
+                             inner_color='black')
 
-# Add scatterplot for long position size
+    # OR Short Position Size Indicator
+    or_short_position_size_fig = go.Figure()
+    or_short_position_size_fig.add_trace(go.Scatter(
+        x=filtered_df['Date'],
+        y=filtered_df['Open Interest'],
+        mode='markers',
+        marker=dict(
+            size=safe_sizes(filtered_df['ORS Position Size']),
+            color=safe_colors(filtered_df['ORS Position Size']),
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(
+                title="OR Short Position Size",
+                thickness=15, len=0.75, yanchor='middle', y=0.5
+            )
+        ),
+        text=[f"OR Short Pos Size: {v:.0f}" for v in filtered_df['ORS Position Size'].fillna(0)],
+        hoverinfo='text',
+        showlegend=False
+    ))
+    bubble_sizes = dynamic_bubble_sizes(filtered_df['ORS Position Size'])
+    for s in bubble_sizes:
+        or_short_position_size_fig.add_trace(go.Scatter(
+            x=[0], y=[0], mode='markers', visible='legendonly',
+            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
+            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
+        ))
+    or_short_position_size_fig.update_layout(
+        title='Short Position Size Indicator (Other Reportables)',
+        xaxis_title='Date', yaxis_title='Open Interest',
+        xaxis=dict(
+            tickmode='array',
+            tickvals=filtered_df['Date'].dt.year.unique(),
+            ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
+            showgrid=True, ticks="outside", tickangle=45
+        ),
+        yaxis=dict(title='Open Interest', showgrid=True, tick0=0),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
+    )
+    add_last_point_highlight(or_short_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
+                             inner_color='black')
+
+    # --- MM Long Position Size Indicator ---
+    long_position_size_fig = go.Figure()  # <-- MUSS vor dem ersten add_trace stehen!
     long_position_size_fig.add_trace(go.Scatter(
-    x=filtered_df['Date'],
-    y=filtered_df['Open Interest'],
-    mode='markers',
-    marker=dict(
-        size=(filtered_df['Long Position Size'] ** (1/3.5)),  # Dynamically adjusted size
-        color=filtered_df['Long Position Size'],  # Color based on number of traders
-        colorscale='Viridis',
-        showscale=True,
-        colorbar=dict(
-            title="Long Position Size ($)",  # Title for colorbar
-            thickness=15,
-            len=0.75,
-            yanchor='middle',
-            y=0.5
-        )
-    ),
-    text=[f"Position Size: {size}" for size in filtered_df['Long Position Size']],  # Tooltip
-    hoverinfo='text',
-    showlegend=False
-))
-    """
-# Add bubble size legend
-    bubble_sizes = [100, 200, 300, 400]  # Example values
-    for size in bubble_sizes:
+        x=filtered_df['Date'],
+        y=filtered_df['Open Interest'],
+        mode='markers',
+        marker=dict(
+            size=safe_sizes(filtered_df['MML Position Size']),
+            color=safe_colors(filtered_df['MML Position Size']),
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(title="MM Long Position Size", thickness=15, len=0.75, yanchor='middle', y=0.5)
+        ),
+        text=[f"MM Long Pos Size: {v:.0f}" for v in filtered_df['MML Position Size'].fillna(0)],
+        hoverinfo='text',
+        showlegend=False
+    ))
+
+    # Dynamische Legende (nur Legende sichtbar)
+    for s in dynamic_bubble_sizes(filtered_df['MML Position Size']):
         long_position_size_fig.add_trace(go.Scatter(
-        x=[None], y=[None],
-        mode='markers',
-        marker=dict(
-            size=(filtered_df['Long Position Size'] ** (1/3.5)),  # Adjusted to match main scatterplot scaling
-            color='gray',  # Neutral color for legend bubbles
-            opacity=0.6
-        ),
-        legendgroup="Bubble Size",
-        showlegend=True,
-        name=f"{size} Traders"  # Label for the legend
-    ))
-    """
-# Update layout for long position size graph
+            x=[0], y=[0], mode='markers', visible='legendonly',
+            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
+            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
+        ))
+
     long_position_size_fig.update_layout(
-    title='Long Position Size Indicator',
-    xaxis_title='Date',
-    yaxis_title='Open Interest',
-    xaxis=dict(
-        tickmode='array',
-        tickvals=filtered_df['Date'].dt.year.unique(),
-        ticktext=[str(year) for year in filtered_df['Date'].dt.year.unique()],
-        showgrid=True,
-        ticks="outside",
-        tickangle=45
-    ),
-    yaxis=dict(
-        title='Open Interest',
-        showgrid=True,
-        tick0=0,  # Startwert
-        dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000,  # Dynamische Schrittweite        gridwidth=1.5  # Dicke der Gitterlinien
-    ),
-    legend=dict(
-        title=dict(text="Number of Traders"),  # Legend title
-        x=1.2,  # Adjust position of legend
-        y=0.5,
-        font=dict(size=12)
+        title='Long Position Size Indicator (Money Managers)',
+        xaxis_title='Date', yaxis_title='Open Interest',
+        xaxis=dict(
+            tickmode='array',
+            tickvals=filtered_df['Date'].dt.year.unique(),
+            ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
+            showgrid=True, ticks="outside", tickangle=45
+        ),
+        yaxis=dict(title='Open Interest', showgrid=True, tick0=0,
+                   dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
     )
-)
+    add_last_point_highlight(long_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
+                             inner_color='black')
 
-# Highlight last point
-    add_last_point_highlight(
-    fig=long_position_size_fig,
-    df=filtered_df,
-    x_col='Date',
-    y_col='Open Interest',
-    inner_size=2,
-    inner_color='black'
-)
-
-    
-    # Short Position Size Indicator
-    short_position_size_fig = go.Figure()
-
-# Add scatterplot for short position size
+    # --- MM Short Position Size Indicator ---
+    short_position_size_fig = go.Figure()  # <-- ebenfalls vor add_trace
     short_position_size_fig.add_trace(go.Scatter(
-    x=filtered_df['Date'],
-    y=filtered_df['Open Interest'],
-    mode='markers',
-    marker=dict(
-        size=(filtered_df['Short Position Size'] ** (1/3.5)),  # Dynamically adjusted size
-        color=filtered_df['Short Position Size'],  # Color based on number of traders
-        colorscale='Viridis',
-        showscale=True,
-        colorbar=dict(
-            title="Short Position Size ($)",  # Title for colorbar
-            thickness=15,
-            len=0.75,
-            yanchor='middle',
-            y=0.5
-        )
-    ),
-    text=[f"Position Size: {size}" for size in filtered_df['Short Position Size']],  # Tooltip
-    hoverinfo='text',
-    showlegend=False
-))
-    """
-# Add bubble size legend
-    bubble_sizes = [50, 100, 150, 200, 250]  # Example values
-    for size in bubble_sizes:
-        short_position_size_fig.add_trace(go.Scatter(
-        x=[None], y=[None],
+        x=filtered_df['Date'],
+        y=filtered_df['Open Interest'],
         mode='markers',
         marker=dict(
-            size=size / 10,  # Adjusted to match main scatterplot scaling
-            color='gray',  # Neutral color for legend bubbles
-            opacity=0.6
+            size=safe_sizes(filtered_df['MMS Position Size']),
+            color=safe_colors(filtered_df['MMS Position Size']),
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(title="MM Short Position Size", thickness=15, len=0.75, yanchor='middle', y=0.5)
         ),
-        legendgroup="Bubble Size",
-        showlegend=True,
-        name=f"{size} Traders"  # Label for the legend
+        text=[f"MM Short Pos Size: {v:.0f}" for v in filtered_df['MMS Position Size'].fillna(0)],
+        hoverinfo='text',
+        showlegend=False
     ))
-    """
-# Update layout for short position size graph
+
+    for s in dynamic_bubble_sizes(filtered_df['MMS Position Size']):
+        short_position_size_fig.add_trace(go.Scatter(
+            x=[0], y=[0], mode='markers', visible='legendonly',
+            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
+            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
+        ))
+
     short_position_size_fig.update_layout(
-    title='Short Position Size Indicator',
-    xaxis_title='Date',
-    yaxis_title='Open Interest',
-    xaxis=dict(
-        tickmode='array',
-        tickvals=filtered_df['Date'].dt.year.unique(),
-        ticktext=[str(year) for year in filtered_df['Date'].dt.year.unique()],
-        showgrid=True,
-        ticks="outside",
-        tickangle=45
-    ),
-    yaxis=dict(
-        title='Open Interest',
-        showgrid=True,
-        tick0=0,  # Startwert
-        dtick=50000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000,  # Dynamische Schrittweite        gridwidth=1.5  # Dicke der Gitterlinien
-    ),
-    legend=dict(
-        title=dict(text="Number of Traders"),  # Legend title
-        x=1.2,  # Adjust position of legend
-        y=0.5,
-        font=dict(size=12)
+        title='Short Position Size Indicator (Money Managers)',
+        xaxis_title='Date', yaxis_title='Open Interest',
+        xaxis=dict(
+            tickmode='array',
+            tickvals=filtered_df['Date'].dt.year.unique(),
+            ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
+            showgrid=True, ticks="outside", tickangle=45
+        ),
+        yaxis=dict(title='Open Interest', showgrid=True, tick0=0,
+                   dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
     )
-)
+    add_last_point_highlight(short_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
+                             inner_color='black')
 
-# Highlight last point
-    add_last_point_highlight(
-    fig=short_position_size_fig,
-    df=filtered_df,
-    x_col='Date',
-    y_col='Open Interest',
-    inner_size=2,
-    inner_color='black'
-)
-
-    
-    # Dry Powder Indicator
+    # --- Dry Powder Indicator---
     dry_powder_fig = go.Figure()
 
-    # Add trace for MML Long
+    bubble_size = (filtered_df['MML Long OI'].abs() + filtered_df['MML Short OI'].abs())
+    desired_max_px = 28
+    sizeref = 2.0 * bubble_size.max() / (desired_max_px ** 2)
+
+    COL_LONG = "#2c7fb8"  # MML
+    COL_SHORT = "#7fcdbb"  # MMS
+
+    # MML Wolke
     dry_powder_fig.add_trace(go.Scatter(
         x=filtered_df['MML Traders'],
         y=filtered_df['MML Long OI'],
         mode='markers',
         marker=dict(
-            size=(filtered_df['MML Long OI'] + abs(filtered_df['MML Short OI'])) / 80,
-            color='cyan',
-            opacity=0.6,
-            sizeref=sizeref,
-            line=dict(width=1, color='DarkSlateGrey')
+            size=bubble_size, sizemode='area', sizeref=sizeref,
+            color=COL_LONG, opacity=0.75, line=dict(width=0.6, color='black')
         ),
-        name='MML Long'
+        name='MML'
     ))
 
-    # Add trace for MML Short
+    # MMS Wolke
     dry_powder_fig.add_trace(go.Scatter(
         x=filtered_df['MMS Traders'],
         y=filtered_df['MML Short OI'],
         mode='markers',
         marker=dict(
-            size=(filtered_df['MML Long OI'] + abs(filtered_df['MML Short OI'])) / 80,
-            color='white',
-            opacity=0.6,
-            sizeref=sizeref,
-            line=dict(width=1, color='DarkSlateGrey')
+            size=bubble_size, sizemode='area', sizeref=sizeref,
+            color=COL_SHORT, opacity=0.75, line=dict(width=0.6, color='black')
         ),
-        name='MML Short'
+        name='MMS'
     ))
 
-    # Mark first and last entry for MML Long
-    dry_powder_fig.add_trace(go.Scatter(
-        x=[filtered_df['MML Traders'].iloc[0]],
-        y=[filtered_df['MML Long OI'].iloc[0]],
-        mode='markers',
-        marker=dict(
-            size=15,
-            color='green',
-            symbol='star',
-            line=dict(width=2, color='black')
-        ),
-        name='MML Long (First)'
-    ))
+    # x-Range über beide Gruppen
+    x_min = float(min(filtered_df['MML Traders'].min(), filtered_df['MMS Traders'].min()))
+    x_max = float(max(filtered_df['MML Traders'].max(), filtered_df['MMS Traders'].max()))
+    xs = np.array([x_min, x_max])
+
+    def add_trend(x_series, y_series, color, name):
+        # NaNs entfernen
+        mask = x_series.notna() & y_series.notna()
+        x = x_series[mask].astype(float).values
+        y = y_series[mask].astype(float).values
+        if len(x) < 2:
+            return
+        m, b = np.polyfit(x, y, 1)
+        ys = m * xs + b
+
+        # Unterzug (weiß, breit) für bessere Sichtbarkeit
+        dry_powder_fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode='lines',
+            line=dict(color='white', width=7),
+            name=name, showlegend=False, hoverinfo='skip'
+        ))
+        # Farblinie oben drauf
+        dry_powder_fig.add_trace(go.Scatter(
+            x=xs, y=ys, mode='lines',
+            line=dict(color=color, width=3),
+            name=name, showlegend=True
+        ))
+
+    # Trendlinien hinzufügen (durch den ganzen Graph)
+    add_trend(filtered_df['MML Traders'], filtered_df['MML Long OI'], COL_LONG, "MML Trend")
+    add_trend(filtered_df['MMS Traders'], filtered_df['MML Short OI'], COL_SHORT, "MMS Trend")
+
+    # Most Recent Week – nur EINE Legendenzeile
     dry_powder_fig.add_trace(go.Scatter(
         x=[filtered_df['MML Traders'].iloc[-1]],
         y=[filtered_df['MML Long OI'].iloc[-1]],
         mode='markers',
-        marker=dict(
-            size=15,
-            color='yellow',
-            symbol='star',
-            line=dict(width=2, color='black')
-        ),
-        name='MML Long (Last)'
-    ))
-
-    # Mark first and last entry for MML Short
-    dry_powder_fig.add_trace(go.Scatter(
-        x=[filtered_df['MMS Traders'].iloc[0]],
-        y=[filtered_df['MML Short OI'].iloc[0]],
-        mode='markers',
-        marker=dict(
-            size=15,
-            color='green',
-            symbol='star',
-            line=dict(width=2, color='black')
-        ),
-        name='MML Short (First)'
+        marker=dict(size=desired_max_px + 4, color='black', line=dict(width=2, color='white')),
+        name='Most Recent Week', legendgroup='recent', showlegend=True
     ))
     dry_powder_fig.add_trace(go.Scatter(
         x=[filtered_df['MMS Traders'].iloc[-1]],
         y=[filtered_df['MML Short OI'].iloc[-1]],
         mode='markers',
-        marker=dict(
-            size=15,
-            color='yellow',
-            symbol='star',
-            line=dict(width=2, color='black')
-        ),
-        name='MML Short (Last)'
+        marker=dict(size=desired_max_px + 4, color='black', line=dict(width=2, color='white')),
+        name='Most Recent Week', legendgroup='recent', showlegend=False  # keine doppelte Legende
     ))
 
     dry_powder_fig.update_layout(
-    xaxis=dict(
-        title='Number of Traders',
-        showgrid=True,  # Aktiviert das Grid
-        gridcolor='LightGray',  # Farbe des Grids
-        gridwidth=2,  # Dicke des Grids
-        zeroline=False  # Keine zusätzliche Null-Linie
-    ),
-    yaxis=dict(
-        title='Long and Short OI',
-        showgrid=True,
-        gridcolor='LightGray',
-        gridwidth=2,
-        zeroline=False
-    ),
-    plot_bgcolor='white',  # Weißer Hintergrund für besseren Kontrast
-    template=None
-)
-
-
-
-
-    
-    # DP Relative Concentration Indicator
-    dp_relative_concentration_fig = go.Figure()
-
-    # Define the groups and colors
-    groups = [
-        ('PMPUL', 'PMPUL Relative Concentration', 'PMPUL Traders', 'darkgreen'),
-        ('PMPUS', 'PMPUS Relative Concentration', 'PMPUS Traders', 'lime'),
-        ('SDL', 'SDL Relative Concentration', 'SDL Traders', 'darkorange'),
-        ('SDS', 'SDS Relative Concentration', 'SDS Traders', 'moccasin'),
-        ('MML', 'MML Relative Concentration', 'MML Traders', 'royalblue'),
-        ('MMS', 'MMS Relative Concentration', 'MMS Traders', 'cyan'),
-        ('ORL', 'ORL Relative Concentration', 'ORL Traders', 'indigo'),
-        ('ORS', 'ORS Relative Concentration', 'ORS Traders', 'plum')
-    ]
-
-    for group, y_col, x_col, color in groups:
-        # Add trace for each group
-        dp_relative_concentration_fig.add_trace(go.Scatter(
-            x=filtered_df[x_col],
-            y=filtered_df[y_col],
-            mode='markers',
-            marker=dict(
-                size=abs(filtered_df[y_col]) / sizeref,  # Adjust size for better visualization
-                color=color,
-                opacity=0.6,
-                sizeref=sizeref,
-                line=dict(width=1, color='DarkSlateGrey')
-            ),
-            name=group,
-            visible='legendonly'  # Initially hide all traces
-        ))
-
-        # Mark first and last entry for each group with 'legendonly' visibility
-        dp_relative_concentration_fig.add_trace(go.Scatter(
-            x=[filtered_df[x_col].iloc[0]],
-            y=[filtered_df[y_col].iloc[0]],
-            mode='markers',
-            marker=dict(
-                size=15,
-                color=color,
-                symbol='star',
-                line=dict(width=2, color='black')
-            ),
-            name=f'{group} (First)',
-            visible='legendonly'  # Initially hide
-        ))
-        dp_relative_concentration_fig.add_trace(go.Scatter(
-            x=[filtered_df[x_col].iloc[-1]],
-            y=[filtered_df[y_col].iloc[-1]],
-            mode='markers',
-            marker=dict(
-                size=15,
-                color=color,
-                symbol='star',
-                line=dict(width=2, color='black')
-            ),
-            name=f'{group} (Last)',
-            visible='legendonly'  # Initially hide
-        ))
-
-    dp_relative_concentration_fig.update_layout(
-        title='DP Relative Concentration Indicator',
-        xaxis_title='Number of Traders',
-        yaxis_title='Long and Short Concentration',
+        title=f"Dry Powder Indicator",
+        xaxis=dict(title='Number of Traders', showgrid=True, gridcolor='LightGray', gridwidth=2, zeroline=False),
+        yaxis=dict(title='Long and Short OI', showgrid=True, gridcolor='LightGray', gridwidth=2, zeroline=False),
+        plot_bgcolor='white',
         legend_title='Trader Group'
     )
 
-    # Calculate a global sizeref to ensure consistency across markets
-    max_bubble_size = 100  # Adjusted for better visualization
-    min_bubble_size = 5   # Set minimum bubble size
+    # --- DP Relative Concentration Indicator (konstante Grösse + 8 schwarze Punkte) ---
+    fig_rc = go.Figure()
+
+    TOTAL_OI = pd.to_numeric(filtered_df.get('Open Interest'), errors='coerce').replace(0, np.nan)
+
+    def rc(long_col, short_col):
+        L = pd.to_numeric(filtered_df.get(long_col), errors='coerce')
+        S = pd.to_numeric(filtered_df.get(short_col), errors='coerce')
+        return 100.0 * ((L / TOTAL_OI) - (S / TOTAL_OI))
+
+    groups = [
+        dict(name='MML', x='Traders M Money Long',
+             rc=rc('Managed Money Long', 'Managed Money Short'), color='#2c7fb8'),
+        dict(name='MMS', x='Traders M Money Short',
+             rc=rc('Managed Money Short', 'Managed Money Long'), color='#7fcdbb'),
+        dict(name='ORL', x='Traders Other Rept Long',
+             rc=rc('Other Reportables Long', 'Other Reportables Short'), color='#f39c12'),
+        dict(name='ORS', x='Traders Other Rept Short',
+             rc=rc('Other Reportables Short', 'Other Reportables Long'), color='#f1c40f'),
+        dict(name='PMPUL', x='Traders Prod/Merc Long',
+             rc=rc('Producer/Merchant/Processor/User Long',
+                   'Producer/Merchant/Processor/User Short'), color='#27ae60'),
+        dict(name='PMPUS', x='Traders Prod/Merc Short',
+             rc=rc('Producer/Merchant/Processor/User Short',
+                   'Producer/Merchant/Processor/User Long'), color='#2ecc71'),
+        dict(name='SDL', x='Traders Swap Long',
+             rc=rc('Swap Dealer Long', 'Swap Dealer Short'), color='#e67e22'),
+        dict(name='SDS', x='Traders Swap Short',
+             rc=rc('Swap Dealer Short', 'Swap Dealer Long'), color='#e74c3c'),
+    ]
+
+    # 1) KONSTANTE Bubble-Grösse in Pixel (für alle gleich)
+    bubble_px = 14  # <— ggf. anpassen
+    recent_px = bubble_px + 6  # schwarze Punkte etwas grösser
+
+    # Historische Punkte je Gruppe
+    for g in groups:
+        x = pd.to_numeric(filtered_df.get(g['x']), errors='coerce')
+        y = g['rc']
+        mask = x.notna() & y.notna()
+        if mask.sum() == 0:
+            continue
+
+        fig_rc.add_trace(go.Scatter(
+            x=x[mask],
+            y=y[mask],
+            mode='markers',
+            marker=dict(
+                size=bubble_px,  # überall gleiche Grösse
+                color=g['color'],
+                opacity=0.8,
+                line=dict(width=0.6, color='black')
+            ),
+            name=g['name']
+        ))
+
+    # 2) PRO GRUPPE: schwarzer Punkt für die letzte verfügbare Beobachtung
+    first_legend_done = False
+    for g in groups:
+        x_series = pd.to_numeric(filtered_df.get(g['x']), errors='coerce')
+        y_series = g['rc']
+        mask = x_series.notna() & y_series.notna()
+        if mask.sum() == 0:
+            continue
+        last_idx = y_series[mask].index[-1]
+        x_last = x_series.loc[last_idx]
+        y_last = y_series.loc[last_idx]
+        if pd.notna(x_last) and pd.notna(y_last):
+            fig_rc.add_trace(go.Scatter(
+                x=[x_last], y=[y_last],
+                mode='markers',
+                marker=dict(size=recent_px, color='black', line=dict(width=2, color='white')),
+                name='Most Recent Week',
+                legendgroup='recent',
+                showlegend=not first_legend_done  # nur 1 Legenden-Eintrag
+            ))
+            first_legend_done = True
+
+    fig_rc.update_layout(
+        title="DP Relative Concentration Indicator",
+        xaxis=dict(title='Number of Traders', showgrid=True, gridcolor='LightGray'),
+        yaxis=dict(title='Long and Short Concentration', showgrid=True, gridcolor='LightGray'),
+        plot_bgcolor='white',
+        legend_title='Trader Group'
+    )
 
     # DP Seasonal Indicator
     dp_seasonal_indicator_fig = go.Figure()
 
     quarters = ['Q1', 'Q2', 'Q3', 'Q4']
-    colors = ['blue', 'cyan', 'orange', 'red']
+    colors = ['#1f77b4', '#17becf', '#ff7f0e', '#d62728']
 
     for quarter, color in zip(quarters, colors):
         quarter_data = filtered_df[filtered_df['Quarter'] == quarter]
-
-        # Normalize the sizes to a 0-1 range
-        norm_sizes = (quarter_data['PMPUL Relative Concentration'] - quarter_data['PMPUL Relative Concentration'].min()) / (quarter_data['PMPUL Relative Concentration'].max() - quarter_data['PMPUL Relative Concentration'].min())
-    
-        # Scale sizes to the desired range
-        scaled_sizes = norm_sizes * (max_bubble_size - min_bubble_size) + min_bubble_size
+        if quarter_data.empty:
+            continue
 
         dp_seasonal_indicator_fig.add_trace(go.Scatter(
             x=quarter_data['PMPUL Traders'],
             y=quarter_data['PMPUL Relative Concentration'],
             mode='markers',
             marker=dict(
-                size=scaled_sizes,
+                size=10,  # 🔹 Fixe, einheitliche Bubblegröße
                 color=color,
-                opacity=0.6,
-                line=dict(width=1, color='DarkSlateGrey')
+                opacity=0.7,
+                line=dict(width=0.6, color='black')
             ),
             name=quarter
         ))
 
+    # Schwarzer Punkt für Most Recent Week
     most_recent_date = filtered_df['Date'].max()
     recent_data = filtered_df[filtered_df['Date'] == most_recent_date]
-    dp_seasonal_indicator_fig.add_trace(go.Scatter(
-        x=recent_data['PMPUL Traders'],
-        y=recent_data['PMPUL Relative Concentration'],
-        mode='markers',
-        marker=dict(
-            size=15,
-            color='black',
-            symbol='circle',
-            line=dict(width=2, color='black')
-        ),
-        name='Most Recent Week'
-    ))
+    if not recent_data.empty:
+        dp_seasonal_indicator_fig.add_trace(go.Scatter(
+            x=recent_data['PMPUL Traders'],
+            y=recent_data['PMPUL Relative Concentration'],
+            mode='markers',
+            marker=dict(
+                size=12,  # etwas grösser zur Hervorhebung
+                color='black',
+                symbol='circle',
+                line=dict(width=1.5, color='white')
+            ),
+            name='Most Recent Week'
+        ))
 
     dp_seasonal_indicator_fig.update_layout(
-        title='DP Seasonal Indicator',
-        xaxis_title='Number of Traders',
-        yaxis_title='Long and Short Concentration',
-        legend_title='Quarter'
+        title=f"DP Seasonal Indicator – {most_recent_date.strftime('%d/%m/%Y')}",
+        xaxis_title="Number of Traders",
+        yaxis_title="Long and Short Concentration",
+        plot_bgcolor='white',
+        legend_title="Quarter",
+        xaxis=dict(showgrid=True, gridcolor='LightGray'),
+        yaxis=dict(showgrid=True, gridcolor='LightGray')
     )
-    
+
     # DP Net Indicators with Medians
     most_recent_date = filtered_df['Date'].max()
     first_date = filtered_df['Date'].min()
@@ -1248,7 +1990,7 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
         yaxis_title='MM Net OI',
         legend_title='Year'
     )
-    
+
     # Dry Powder Position Size Indicator (MML & MMS)
     dff = filtered_df
     if mm_type == 'MML':
@@ -1283,7 +2025,7 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
             colorscale='Viridis',
             showscale=True,
             colorbar=dict(
-                title='',
+                title='Open Interest',
                 thickness=15,
                 len=0.75,
                 yanchor='middle'
@@ -1330,16 +2072,33 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
         yaxis_title='{} Position Size'.format(mm_type),
         showlegend=True,
     )
-    
+
     # Dry Powder Hedging Indicator (MML vs PMPUL / MMS vs PMPUS)
     hedging_fig = create_hedging_indicator(filtered_df, trader_group, start_date, end_date)
 
-    return (long_clustering_fig, short_clustering_fig, long_position_size_fig, 
-            short_position_size_fig, dry_powder_fig, dp_relative_concentration_fig,
-            dp_seasonal_indicator_fig, dp_net_indicators_fig, dp_position_size_fig, hedging_fig)
+    return (
+        long_clustering_fig,
+        short_clustering_fig,
+        pmpu_long_position_size_fig,
+        pmpu_short_position_size_fig,
+        sd_long_position_size_fig,
+        sd_short_position_size_fig,
+        long_position_size_fig,
+        short_position_size_fig,
+        or_long_position_size_fig,
+        or_short_position_size_fig,
+        dry_powder_fig,
+        fig_rc,
+        dp_seasonal_indicator_fig,
+        dp_net_indicators_fig,
+        dp_position_size_fig,
+        hedging_fig
+    )
+
 
 # Function to create the hedging indicator
 def create_hedging_indicator(data, trader_group, start_date, end_date):
+    import numpy as np
     # Filter data by date range
     mask = (data['Date'] >= start_date) & (data['Date'] <= end_date)
     data = data.loc[mask]
@@ -1350,73 +2109,89 @@ def create_hedging_indicator(data, trader_group, start_date, end_date):
         color = 'PMPUL Relative Concentration'
         title = 'Dry Powder Hedging Indicator (MML vs PMPUL)'
         colorbar_title = 'PMPUL OI Range'
+        x_title = 'MM Number of Long Traders'
+        y_title = 'MM Long OI'
     else:
         x = 'Traders M Money Short'
         y = 'MMS Short OI'
         color = 'PMPUS Relative Concentration'
         title = 'Dry Powder Hedging Indicator (MMS vs PMPUS)'
         colorbar_title = 'PMPUS OI Range'
+        x_title = 'MM Number of Short Traders'
+        y_title = 'MM Short OI'
 
-    # Create the scatter plot
+    # Vorab die gewünschten Achsenranges bestimmen (benötigen wir auch für die Trendlinie)
+    x_min = float(np.nanmin(data[x])) - 10
+    x_max = float(np.nanmax(data[x])) + 10
+    y_min = float(np.nanmin(data[y])) - 50000
+    y_max = float(np.nanmax(data[y])) + 50000
+
+    # Haupt-Scatter
     trace = go.Scatter(
         x=data[x],
         y=data[y],
         mode='markers',
         marker=dict(
-            size=data['Open Interest'] / 1500,  # Adjust the size scale if necessary
+            size=data['Open Interest'] / 1500,  # Bubble-Grösse ∝ Total OI
             color=data[color],
             colorscale='RdBu',
             showscale=True,
-            colorbar=dict(
-                title=colorbar_title,
-                len=0.5,
-                x=1.1  # Adjust the x position of the color bar
-            )
+            colorbar=dict(title=colorbar_title, len=0.5, x=1.1)
         ),
         text=data['Market Names'],
         hoverinfo='text',
-        showlegend=False  # Remove the default trace name from the legend
+        showlegend=False
     )
 
-    # Add markers for the first and last week
+    # First / Last Week Marker
     first_week = data.iloc[0]
     last_week = data.iloc[-1]
 
     first_week_trace = go.Scatter(
-        x=[first_week[x]],
-        y=[first_week[y]],
-        mode='markers',
-        marker=dict(color='red', size=15),
+        x=[first_week[x]], y=[first_week[y]],
+        mode='markers', marker=dict(color='red', size=15),
         name='First Week'
     )
-
     last_week_trace = go.Scatter(
-        x=[last_week[x]],
-        y=[last_week[y]],
-        mode='markers',
-        marker=dict(color='black', size=15),
+        x=[last_week[x]], y=[last_week[y]],
+        mode='markers', marker=dict(color='black', size=15),
         name='Most Recent Week'
     )
 
-    # Create the layout
+    # --- Trendlinie (OLS) - über die ganze Plotbreite, solid, ohne Legende/Annotation ---
+    xv = data[x].astype(float).to_numpy()
+    yv = data[y].astype(float).to_numpy()
+    mask_finite = np.isfinite(xv) & np.isfinite(yv)
+
+    trend_trace = None
+    if mask_finite.sum() >= 2:
+        m, c = np.polyfit(xv[mask_finite], yv[mask_finite], 1)
+        # exakt die Plotbreite verwenden
+        x_line = np.array([x_min, x_max])
+        y_line = m * x_line + c
+        trend_trace = go.Scatter(
+            x=x_line, y=y_line,
+            mode='lines',
+            line=dict(color='black', width=2),  # durchgezogen
+            hoverinfo='skip',
+            showlegend=False                   # kein Eintrag in der Legende
+        )
+
+    # Layout
     layout = go.Layout(
         title=title,
-        xaxis=dict(
-            title='MM Number of Long Traders' if trader_group == "MML" else 'MM Number of Short Traders',
-            range=[min(data[x]) - 10, max(data[x]) + 10]
-        ),
-        yaxis=dict(
-            title='MM Long OI' if trader_group == "MML" else 'MM Short OI',
-            range=[min(data[y]) - 50000, max(data[y]) + 50000]
-        ),
+        xaxis=dict(title=x_title, range=[x_min, x_max]),
+        yaxis=dict(title=y_title, range=[y_min, y_max]),
         showlegend=True,
-        width=1000,
-        height=600
+        width=1000, height=600
     )
 
-    # Create the figure
-    fig = go.Figure(data=[trace, first_week_trace, last_week_trace], layout=layout)
+    # Figure zusammensetzen
+    traces = [trace, first_week_trace, last_week_trace]
+    if trend_trace:
+        traces.append(trend_trace)
 
+    fig = go.Figure(data=traces, layout=layout)
     return fig
 
 # Callback to update the Dry Powder Concentration/Clustering Indicator graph
