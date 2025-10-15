@@ -38,7 +38,7 @@ multitasking==0.0.11
 namex==0.0.8
 nest-asyncio==1.6.0
 numba==0.60.0
-numpy==1.26.4
+numpy==1.26.2
 openpyxl==3.1.5
 opt-einsum==3.3.0
 optree==0.12.1

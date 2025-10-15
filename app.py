@@ -11,18 +11,18 @@ df = pd.read_csv('https://raw.githubusercontent.com/plotly/datasets/master/gapmi
 
 app = Dash()
 
-token = "D7cFFZ7LzmMJn0qO-85EYhjRfhKqydGLSE-gkoR-e1RLivHN_Ud_mj_r5s4kGXKHtUg-n0xI7I3L0-6Uv8ZVhw=="
+token = "GmtV-5jzEZCrfZ7Bq-qhc8b7kf4g5nMjYy2sf6ix149GFULNxSAHU5ZVXA-m-xaaxyUKF9wZt7w44h95WdoXJg=="
 
 client = InfluxDBClient(url="http://localhost:8086", token=token, org="Student")
 
 app.layout = dmc.Container([
     dmc.Title('My First App with Data, Graph, and Controls', color="blue", size="h3"),
-    dmc.RadioGroup(
-            [dmc.Radio(i, value=i) for i in  ['pop', 'lifeExp', 'gdpPercap']],
-            id='my-dmc-radio-item',
-            value='lifeExp',
-            size="sm"
-        ),
+dmc.RadioGroup(
+    [dmc.Radio(i, value=i) for i in ['pop', 'lifeExp', 'gdpPercap']],
+    id='my-dmc-radio-item',
+    value='lifeExp',
+    size="sm"
+),
     dmc.Grid([
         dmc.Col([
             dash_table.DataTable(data=df.to_dict('records'), page_size=12, style_table={'overflowX': 'auto'})

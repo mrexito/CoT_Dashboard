@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 import zipfile
 import pandas as pd
 
+
 # Function to create folder on desktop
 def create_folder_on_desktop(folder_name):
     desktop_path = os.path.join(os.path.join(os.path.expanduser('~')), 'Desktop')
@@ -12,17 +13,19 @@ def create_folder_on_desktop(folder_name):
         os.makedirs(folder_path)
     return folder_path
 
+
 # Function to download and verify zip file
 def download_file(url, folder_path, year):
     response = requests.get(url)
-    print(response.status_code) 
+    print(response.status_code)
     if response.status_code != 200:
-        print(f"Fehler: Konnte die Webseite nicht laden. Statuscode: {response.status_code}")
-    return ModuleNotFoundError
+        print(f"Error: the webpage could not be loaded. Status code: {response.status_code}")
+        return None
     zip_path = os.path.join(folder_path, f'{year}.zip')
     with open(zip_path, 'wb') as file:
         file.write(response.content)
     return zip_path
+
 
 # Function to extract files from zip if valid
 def extract_zip(zip_path, folder_path, year):
@@ -41,6 +44,7 @@ def extract_zip(zip_path, folder_path, year):
         os.remove(zip_path)
         return None
 
+
 # Function to verify if the file is a valid Excel file
 def is_valid_excel(file_path):
     try:
@@ -49,6 +53,7 @@ def is_valid_excel(file_path):
     except Exception as e:
         print(f"Error reading {file_path}: {e}")
         return False
+
 
 # Function to combine xls files efficiently and rename columns
 def combine_xls_files(folder_path, output_file_name):
@@ -80,7 +85,7 @@ def combine_xls_files(folder_path, output_file_name):
         "Traders_Other_Rept_Short_All",
         "Traders_Other_Rept_Spread_All"
     ]
-    
+
     combined_data = []
     for year in range(2014, 2025):
         file_path = os.path.join(folder_path, f'{year}_CoT-Data.xls')
@@ -88,7 +93,7 @@ def combine_xls_files(folder_path, output_file_name):
             df = pd.read_excel(file_path, usecols=columns_to_keep)
             combined_data.append(df)
     combined_data = pd.concat(combined_data, ignore_index=True)
-    
+
     # Rename columns
     combined_data.rename(columns={
         "Market_and_Exchange_Names": "Market Names",
@@ -118,7 +123,7 @@ def combine_xls_files(folder_path, output_file_name):
         "Traders_Other_Rept_Short_All": "Traders_Other_Rept_Short",
         "Traders_Other_Rept_Spread_All": "Traders_Other_Rept_Spread"
     }, inplace=True)
-    
+
     # Filter and rename market names
     market_filter = {
         "GOLD - COMMODITY EXCHANGE INC.": "Gold",
@@ -127,14 +132,15 @@ def combine_xls_files(folder_path, output_file_name):
         "PALLADIUM - NEW YORK MERCANTILE EXCHANGE": "Palladium",
         "COPPER- #1 - COMMODITY EXCHANGE INC.": "Copper"
     }
-    
+
     combined_data = combined_data[combined_data["Market Names"].isin(market_filter.keys())]
     combined_data["Market Names"].replace(market_filter, inplace=True)
-    
+
     output_file_path = os.path.join(folder_path, f'{output_file_name}.xlsx')
     if os.path.exists(output_file_path):
         os.remove(output_file_path)
     combined_data.to_excel(output_file_path, index=False, engine='openpyxl')
+
 
 # Main function to orchestrate the process
 def main():
@@ -160,12 +166,18 @@ def main():
     years = range(2024, 2013, -1)
 
     for selector, year in zip(selectors, years):
-        link = soup.select_one(selector).get('href')
+        element = soup.select_one(selector)
+        if element is None:
+            print(f"No link found for year {year} with selector {selector}.")
+            continue
+        link = element.get('href')
         download_url = 'https://www.cftc.gov' + link
         zip_path = download_file(download_url, folder_path, year)
-        extract_zip(zip_path, folder_path, year)
+        if zip_path:
+            extract_zip(zip_path, folder_path, year)
 
     combine_xls_files(folder_path, 'CoT-Data_Last-ten-years')
+
 
 if __name__ == "__main__":
     main()
