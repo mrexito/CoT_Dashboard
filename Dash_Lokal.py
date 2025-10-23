@@ -605,7 +605,7 @@ app.layout = html.Div([
 
                 **Achsen (Zeitpunkt \(t\)):**  
                 - **x-Achse:** Anzahl der Trader in der jeweiligen Gruppe.  
-                - **y-Achse:** Größe der offenen Positionen (Open Interest).  
+                - **y-Achse:** Grösse der offenen Positionen (Open Interest).  
 
                 $$
                 x_{\mathrm{MML}}(t) = N_{\mathrm{MML}}(t), 
@@ -619,8 +619,8 @@ app.layout = html.Div([
                 y_{\mathrm{MMS}}(t) = OI_{\mathrm{MML}}^{S}(t)\;(\text{im Plot negativ})
                 $$
 
-                **Bubble-Größe:**  
-                Die Fläche der Bubbles zeigt, wie groß die Gesamtposition (Long + Short) im Verhältnis ist – je grösser die Bubble, desto mehr offene Kontrakte (Open Interest) liegen vor.
+                **Bubble-Grösse:**  
+                Die Fläche der Bubbles zeigt, wie gross die Gesamtposition (Long + Short) im Verhältnis ist – je grösser die Bubble, desto mehr offene Kontrakte (Open Interest) liegen vor.
 
                 **Begriffe:**  
                 - $OI$ (*Open Interest*): Anzahl offener Kontrakte (Long bzw. Short) einer Gruppe zu einem Zeitpunkt.  
@@ -838,7 +838,7 @@ app.layout = html.Div([
                 $$
                 - Anzahl der aktiven Money Manager Trader in Long- oder Short-Positionen
 
-                y-Achse (Positionsgröße):
+                y-Achse (Positionsgrösse):
                 $$
                 y \;=\; \text{MM (Long oder Short) Open Interest}
                 $$
@@ -856,7 +856,7 @@ app.layout = html.Div([
                 - **PMPU(L/S)** bezeichnet je nach Auswahl Long (PMPUL) oder Short (PMPUS)
 
                 **Weitere Visualisierungselemente:**
-                - **Größe der Bubbles:** proportional zum gesamten Open Interest (Marktliquidität bzw. Marktgewicht)  
+                - **Grösse der Bubbles:** proportional zum gesamten Open Interest (Marktliquidität bzw. Marktgewicht)  
                 - **Farbe der Bubbles:** zeigt die relative Stärke/Positionierung der PMPU-Gruppe im beobachteten Zeitraum
                 """, mathjax=True),
 
@@ -1133,6 +1133,8 @@ def update_table(selected_market, start_date, end_date):
      Input('mm-radio', 'value'),
      Input('trader-group-radio', 'value')]
 )
+
+
 
 def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
     filtered_df = df_pivoted[(df_pivoted['Market Names'] == selected_market) &
@@ -2127,12 +2129,22 @@ def create_hedging_indicator(data, trader_group, start_date, end_date):
     y_max = float(np.nanmax(data[y])) + 50000
 
     # Haupt-Scatter
+    # --- Bubble sizing (robust für alle Märkte) ---
+    oi = pd.to_numeric(data['Open Interest'], errors='coerce').abs()
+
+    desired_max_px = 26  # max. sichtbarer Durchmesser der grössten Bubble
+    desired_min_px = 6  # Mindestgrösse, damit kleine Punkte sichtbar bleiben
+    sizeref = 2.0 * oi.max() / (desired_max_px ** 2)
+
     trace = go.Scatter(
         x=data[x],
         y=data[y],
         mode='markers',
         marker=dict(
-            size=data['Open Interest'] / 1500,  # Bubble-Grösse ∝ Total OI
+            size=oi,  # Rohwert (oder log1p(oi) falls oben aktiviert)
+            sizemode='area',  # Punktfläche ∝ size
+            sizeref=sizeref,  # skaliert auf desired_max_px
+            sizemin=desired_min_px,  # minimale Punktgrösse in Pixel
             color=data[color],
             colorscale='RdBu',
             showscale=True,
