@@ -12,7 +12,7 @@ df = pd.read_csv('https://raw.githubusercontent.com/plotly/datasets/master/gapmi
 
 app = Dash()
 
-token = "3baLLLDojDOW9jpoBOx1ejzprCzsMHPpBhFADeEZuKJToIP6h_MjU3fsCwgtBIKC9Aaz3ufBNiL-cREirFbXCQ=="
+token = "KLXZD0eL47iwO1vJOU9N8rBEql8cLaHblvuDr6Ifaq2GGGBcGKhvVOfHiK21zbcQePFm6mdNur2ePHp6GnuGjA=="
 
 client = InfluxDBClient(url="https://eu-central-1-1.aws.cloud2.influxdata.com", token=token, org="cot-plotly")
 
