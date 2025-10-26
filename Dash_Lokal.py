@@ -337,6 +337,28 @@ def scale_marker_sizes(series, min_px=6, max_px=28, n_legend=4):
     legend_px   = min_px + ((legend_vals - vmin) / (vmax - vmin)) * (max_px - min_px)
     return px, list(zip(legend_vals, legend_px))
 
+def scaled_diameters(vals, min_px=6, max_px=26):
+
+    # In ein float-Array konvertieren (verträglich mit Series/ndarray/list/scalar)
+    v = np.asarray(vals, dtype=float)
+
+    # Nicht-finite durch 0 ersetzen
+    v = np.where(np.isfinite(v), v, 0.0)
+
+    if v.size == 0:
+        return np.array([], dtype=float)
+
+    lo = np.nanmin(v)
+    hi = np.nanmax(v)
+
+    # Falls alle Werte gleich (oder leer), mittlere Größe verwenden
+    if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+        return np.full_like(v, (min_px + max_px) / 2.0, dtype=float)
+
+    # Linear skalieren auf Durchmesser (Pixel)
+    return np.interp(v, (lo, hi), (min_px, max_px))
+
+
 
 # Example calculation
 median_oi, median_traders = calculate_medians(df_pivoted)
@@ -1157,8 +1179,6 @@ def update_table(selected_market, start_date, end_date):
      Input('trader-group-radio', 'value')]
 )
 
-
-
 def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
     filtered_df = df_pivoted[(df_pivoted['Market Names'] == selected_market) &
                              (df_pivoted['Date'] >= start_date) & 
@@ -1169,26 +1189,16 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
 
     # 1) Daten vorbereiten
     tr_long_raw = pd.to_numeric(filtered_df['Traders Prod/Merc Long'], errors='coerce')
-    tr_long = tr_long_raw.fillna(0).clip(lower=0).astype(float)  # keine NaNs/negativen Werte
+    tr_long = tr_long_raw.fillna(0).clip(lower=0).astype(float)
 
-    # Farbe bleibt Positionsgröße (wie bisher)
-    # Falls du keine safe_colors(df[col]) Helper-Funktion hast, nutze einfach die Spalte direkt.
+    # Farbe = Positionsgröße (Long)
     try:
         col_long = safe_colors(filtered_df['PMPUL Position Size'])
     except Exception:
         col_long = pd.to_numeric(filtered_df['PMPUL Position Size'], errors='coerce').fillna(0)
 
-    # 2) Bubble-Skalierung (Fläche ∝ Traderzahl) + Fallbacks
-    desired_max_px = 26  # max. sichtbarer Durchmesser
-    desired_min_px = 6  # min. Durchmesser (auch wenn Traderzahl sehr klein/0)
-
-    max_traders = float(tr_long.max()) if np.isfinite(tr_long.max()) else 0.0
-    if max_traders <= 0:
-        # komplett leere/NA-Daten: nicht crashen, mini-Bubbles anzeigen
-        tr_long[:] = 1.0
-        max_traders = 1.0
-
-    sizeref_traders_long = 2.0 * max_traders / (desired_max_px ** 2)
+    # 2) Durchmesser explizit auf Pixel mappen (z.B. 6–26 px)
+    sizes_long = scaled_diameters(tr_long, min_px=6, max_px=26)
 
     # 3) Punkte plotten
     pmpu_long_position_size_fig.add_trace(
@@ -1197,19 +1207,15 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
             y=filtered_df['Open Interest'],
             mode='markers',
             marker=dict(
-                size=tr_long,  # <-- Größe = Number of Traders (PMPU Long)
-                sizemode='area',
-                sizeref=sizeref_traders_long,
-                sizemin=desired_min_px,
-                color=col_long,  # <-- Farbe = Positionsgröße
+                size=sizes_long,  # direkte Pixel-Durchmesser
+                sizemode='diameter',  # Werte = Durchmesser
+                sizeref=1,  # keine weitere Skalierung
+                color=col_long,  # Farbe = Positionsgröße
                 colorscale='Viridis',
                 showscale=True,
                 colorbar=dict(
                     title="PMPU Long Position Size",
-                    thickness=15,
-                    len=0.75,
-                    yanchor='middle',
-                    y=0.5
+                    thickness=15, len=0.75, yanchor='middle', y=0.5
                 )
             ),
             text=[
@@ -1229,27 +1235,22 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
         )
     )
 
-    # 4) Bubble-Size-Legende (nutzt dieselbe sizeref!)
+    # 4) Bubble-Size-Legende (gleiche Skalierung wie oben)
     base = tr_long[tr_long > 0]
     if base.size >= 3 and base.max() > 1:
         legend_vals = np.unique(np.round(np.quantile(base, [0.25, 0.5, 0.75, 1.0])).astype(int))
         legend_vals = legend_vals[legend_vals > 0]
     else:
-        legend_vals = np.array([10, 50, 100], dtype=int)
+        legend_vals = np.array([10, 20, 35], dtype=int)
 
-    for v in legend_vals:
+    legend_sizes = scaled_diameters(legend_vals, min_px=6, max_px=26)
+
+    for v, s in zip(legend_vals, legend_sizes):
         pmpu_long_position_size_fig.add_trace(
             go.Scatter(
-                x=[None], y=[None],  # reine Legendeneinträge
+                x=[None], y=[None],
                 mode='markers',
-                marker=dict(
-                    size=float(v),
-                    sizemode='area',
-                    sizeref=sizeref_traders_long,
-                    sizemin=desired_min_px,
-                    color='gray',
-                    opacity=0.6
-                ),
+                marker=dict(size=float(s), sizemode='diameter', sizeref=1, color='gray', opacity=0.6),
                 showlegend=True,
                 name=f"{int(v)} Traders",
                 hoverinfo='skip'
@@ -1261,25 +1262,13 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
         title='Long Position Size Indicator (PMPU)',
         xaxis_title='Date',
         yaxis_title='Open Interest',
-        xaxis=dict(
-            showgrid=True,
-            ticks="outside",
-            tickangle=45
-        ),
-        yaxis=dict(
-            title='Open Interest',
-            showgrid=True
-        ),
-        legend=dict(
-            title=dict(text="Number of Traders"),
-            itemsizing='trace',
-            x=1.18, y=0.5,
-            font=dict(size=12)
-        ),
+        xaxis=dict(showgrid=True, ticks="outside", tickangle=45),
+        yaxis=dict(title='Open Interest', showgrid=True),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.18, y=0.5, font=dict(size=12)),
         margin=dict(l=60, r=160, t=60, b=60)
     )
 
-    # 6) Letzten Punkt hervorheben (falls du die Helper-Funktion hast)
+    # 6) Optional: letzten Punkt hervorheben
     try:
         add_last_point_highlight(
             fig=pmpu_long_position_size_fig,
@@ -1291,142 +1280,282 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
 
     # PMPU Short Position Size Indicator
     pmpu_short_position_size_fig = go.Figure()
-    pmpu_short_position_size_fig.add_trace(go.Scatter(
-        x=filtered_df['Date'],
-        y=filtered_df['Open Interest'],
-        mode='markers',
-        marker=dict(
-            size=safe_sizes(filtered_df['PMPUS Position Size']),
-            color=safe_colors(filtered_df['PMPUS Position Size']),
-            colorscale='Viridis',
-            showscale=True,
-            colorbar=dict(
-                title="PMPU Short Position Size",
-                thickness=15,
-                len=0.75,
-                yanchor='middle',
-                y=0.5
+
+    # 1) Daten vorbereiten
+    tr_short_raw = pd.to_numeric(filtered_df['Traders Prod/Merc Short'], errors='coerce')
+    tr_short = tr_short_raw.fillna(0).clip(lower=0).astype(float)
+
+    # Farbe = Positionsgröße (Short)
+    try:
+        col_short = safe_colors(filtered_df['PMPUS Position Size'])
+    except Exception:
+        col_short = pd.to_numeric(filtered_df['PMPUS Position Size'], errors='coerce').fillna(0)
+
+    # 2) Durchmesser explizit auf Pixel mappen (z.B. 6–26 px)
+    sizes_short = scaled_diameters(tr_short, min_px=6, max_px=26)
+
+    # 3) Punkte plotten
+    pmpu_short_position_size_fig.add_trace(
+        go.Scatter(
+            x=filtered_df['Date'],
+            y=filtered_df['Open Interest'],
+            mode='markers',
+            marker=dict(
+                size=sizes_short,  # direkte Pixel-Durchmesser
+                sizemode='diameter',
+                sizeref=1,
+                color=col_short,  # Farbe = Positionsgröße (Short)
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(
+                    title="PMPU Short Position Size",
+                    thickness=15, len=0.75, yanchor='middle', y=0.5
+                )
+            ),
+            text=[
+                f"Date: {d:%Y-%m-%d}<br>"
+                f"Open Interest: {int(oi):,}<br>"
+                f"Traders (Short): {int(t)}<br>"
+                f"PosSize (avg): {float(ps):,.0f}"
+                for d, oi, t, ps in zip(
+                    filtered_df['Date'],
+                    pd.to_numeric(filtered_df['Open Interest'], errors='coerce').fillna(0),
+                    tr_short,
+                    pd.to_numeric(filtered_df['PMPUS Position Size'], errors='coerce').fillna(0)
+                )
+            ],
+            hoverinfo='text',
+            showlegend=False
+        )
+    )
+
+    # 4) Bubble-Size-Legende (gleiche Skalierung wie oben)
+    base_s = tr_short[tr_short > 0]
+    if base_s.size >= 3 and base_s.max() > 1:
+        legend_vals = np.unique(np.round(np.quantile(base_s, [0.25, 0.5, 0.75, 1.0])).astype(int))
+        legend_vals = legend_vals[legend_vals > 0]
+    else:
+        legend_vals = np.array([10, 20, 35], dtype=int)
+
+    legend_sizes = scaled_diameters(legend_vals, min_px=6, max_px=26)
+
+    for v, s in zip(legend_vals, legend_sizes):
+        pmpu_short_position_size_fig.add_trace(
+            go.Scatter(
+                x=[None], y=[None],
+                mode='markers',
+                marker=dict(size=float(s), sizemode='diameter', sizeref=1, color='gray', opacity=0.6),
+                showlegend=True,
+                name=f"{int(v)} Traders",
+                hoverinfo='skip'
             )
-        ),
-        text=[f"PMPU Short Pos Size: {v:.0f}" for v in filtered_df['PMPUS Position Size'].fillna(0)],
-        hoverinfo='text',
-        showlegend=False
-    ))
+        )
 
-    bubble_sizes = dynamic_bubble_sizes(filtered_df['PMPUS Position Size'])
-    for s in bubble_sizes:
-        pmpu_short_position_size_fig.add_trace(go.Scatter(
-            x=[0], y=[0], mode='markers', visible='legendonly',
-            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
-            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
-        ))
-
+    # 5) Layout
     pmpu_short_position_size_fig.update_layout(
         title='Short Position Size Indicator (PMPU)',
         xaxis_title='Date',
         yaxis_title='Open Interest',
-        xaxis=dict(
-            tickmode='array',
-            tickvals=filtered_df['Date'].dt.year.unique(),
-            ticktext=[str(year) for year in filtered_df['Date'].dt.year.unique()],
-            showgrid=True, ticks="outside", tickangle=45
-        ),
-        yaxis=dict(
-            title='Open Interest', showgrid=True, tick0=0,
-            dtick=50000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000
-        ),
-        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
-    )
-    add_last_point_highlight(
-        fig=pmpu_short_position_size_fig,
-        df=filtered_df, x_col='Date', y_col='Open Interest',
-        inner_size=2, inner_color='black'
+        xaxis=dict(showgrid=True, ticks="outside", tickangle=45),
+        yaxis=dict(title='Open Interest', showgrid=True),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.18, y=0.5, font=dict(size=12)),
+        margin=dict(l=60, r=160, t=60, b=60)
     )
 
-    # SD Long Position Size Indicator
+    # 6) Optional: letzten Punkt hervorheben
+    try:
+        add_last_point_highlight(
+            fig=pmpu_short_position_size_fig,
+            df=filtered_df, x_col='Date', y_col='Open Interest',
+            inner_size=2, inner_color='black'
+        )
+    except Exception:
+        pass
+
     sd_long_position_size_fig = go.Figure()
-    sd_long_position_size_fig.add_trace(go.Scatter(
-        x=filtered_df['Date'],
-        y=filtered_df['Open Interest'],
-        mode='markers',
-        marker=dict(
-            size=safe_sizes(filtered_df['SDL Position Size']),
-            color=safe_colors(filtered_df['SDL Position Size']),
-            colorscale='Viridis',
-            showscale=True,
-            colorbar=dict(
-                title="SD Long Position Size",
-                thickness=15, len=0.75, yanchor='middle', y=0.5
+
+    # 1) Daten vorbereiten
+    sd_tr_long_raw = pd.to_numeric(filtered_df['Traders Swap Long'], errors='coerce')
+    sd_tr_long = sd_tr_long_raw.fillna(0).clip(lower=0).astype(float)
+
+    # Farbe = Positionsgröße (Long)
+    try:
+        sd_col_long = safe_colors(filtered_df['SDL Position Size'])
+    except Exception:
+        sd_col_long = pd.to_numeric(filtered_df['SDL Position Size'], errors='coerce').fillna(0)
+
+    # 2) Durchmesser explizit auf Pixel mappen (z.B. 6–26 px)
+    sd_sizes_long = scaled_diameters(sd_tr_long, min_px=6, max_px=26)
+
+    # 3) Punkte plotten
+    sd_long_position_size_fig.add_trace(
+        go.Scatter(
+            x=filtered_df['Date'],
+            y=filtered_df['Open Interest'],
+            mode='markers',
+            marker=dict(
+                size=sd_sizes_long,  # direkte Pixel-Durchmesser
+                sizemode='diameter',  # Werte = Durchmesser
+                sizeref=1,  # keine weitere Skalierung
+                color=sd_col_long,  # Farbe = Positionsgröße
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(
+                    title="SD Long Position Size",
+                    thickness=15, len=0.75, yanchor='middle', y=0.5
+                )
+            ),
+            text=[
+                f"Date: {d:%Y-%m-%d}<br>"
+                f"Open Interest: {int(oi):,}<br>"
+                f"Traders (Long): {int(t)}<br>"
+                f"PosSize (avg): {float(ps):,.0f}"
+                for d, oi, t, ps in zip(
+                    filtered_df['Date'],
+                    pd.to_numeric(filtered_df['Open Interest'], errors='coerce').fillna(0),
+                    sd_tr_long,
+                    pd.to_numeric(filtered_df['SDL Position Size'], errors='coerce').fillna(0)
+                )
+            ],
+            hoverinfo='text',
+            showlegend=False
+        )
+    )
+
+    # 4) Bubble-Size-Legende (gleiche Skalierung wie oben)
+    sd_baseL = sd_tr_long[sd_tr_long > 0]
+    if sd_baseL.size >= 3 and sd_baseL.max() > 1:
+        sd_legend_valsL = np.unique(np.round(np.quantile(sd_baseL, [0.25, 0.5, 0.75, 1.0])).astype(int))
+        sd_legend_valsL = sd_legend_valsL[sd_legend_valsL > 0]
+    else:
+        sd_legend_valsL = np.array([10, 20, 35], dtype=int)
+
+    sd_legend_sizesL = scaled_diameters(sd_legend_valsL, min_px=6, max_px=26)
+    for v, s in zip(sd_legend_valsL, sd_legend_sizesL):
+        sd_long_position_size_fig.add_trace(
+            go.Scatter(
+                x=[None], y=[None],
+                mode='markers',
+                marker=dict(size=float(s), sizemode='diameter', sizeref=1, color='gray', opacity=0.6),
+                showlegend=True,
+                name=f"{int(v)} Traders",
+                hoverinfo='skip'
             )
-        ),
-        text=[f"SD Long Pos Size: {v:.0f}" for v in filtered_df['SDL Position Size'].fillna(0)],
-        hoverinfo='text',
-        showlegend=False
-    ))
-    # Bubble-Size-Legende SD Long
-    bubble_sizes = dynamic_bubble_sizes(filtered_df['SDL Position Size'])
-    for s in bubble_sizes:
-        sd_long_position_size_fig.add_trace(go.Scatter(
-            x=[0], y=[0], mode='markers', visible='legendonly',
-            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
-            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
-        ))
+        )
+
+    # 5) Layout
     sd_long_position_size_fig.update_layout(
         title='Long Position Size Indicator (Swap Dealers)',
-        xaxis_title='Date', yaxis_title='Open Interest',
-        xaxis=dict(
-            tickmode='array',
-            tickvals=filtered_df['Date'].dt.year.unique(),
-            ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
-            showgrid=True, ticks="outside", tickangle=45
-        ),
-        yaxis=dict(title='Open Interest', showgrid=True, tick0=0),
-        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
+        xaxis_title='Date',
+        yaxis_title='Open Interest',
+        xaxis=dict(showgrid=True, ticks="outside", tickangle=45),
+        yaxis=dict(title='Open Interest', showgrid=True),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.18, y=0.5, font=dict(size=12)),
+        margin=dict(l=60, r=160, t=60, b=60)
     )
-    add_last_point_highlight(sd_long_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
-                             inner_color='black')
+
+    # 6) Optional: letzten Punkt hervorheben
+    try:
+        add_last_point_highlight(
+            fig=sd_long_position_size_fig,
+            df=filtered_df, x_col='Date', y_col='Open Interest',
+            inner_size=2, inner_color='black'
+        )
+    except Exception:
+        pass
 
     # SD Short Position Size Indicator
     sd_short_position_size_fig = go.Figure()
-    sd_short_position_size_fig.add_trace(go.Scatter(
-        x=filtered_df['Date'],
-        y=filtered_df['Open Interest'],
-        mode='markers',
-        marker=dict(
-            size=safe_sizes(filtered_df['SDS Position Size']),
-            color=safe_colors(filtered_df['SDS Position Size']),
-            colorscale='Viridis',
-            showscale=True,
-            colorbar=dict(
-                title="SD Short Position Size",
-                thickness=15, len=0.75, yanchor='middle', y=0.5
+
+    # 1) Daten vorbereiten
+    sd_tr_short_raw = pd.to_numeric(filtered_df['Traders Swap Short'], errors='coerce')
+    sd_tr_short = sd_tr_short_raw.fillna(0).clip(lower=0).astype(float)
+
+    # Farbe = Positionsgröße (Short)
+    try:
+        sd_col_short = safe_colors(filtered_df['SDS Position Size'])
+    except Exception:
+        sd_col_short = pd.to_numeric(filtered_df['SDS Position Size'], errors='coerce').fillna(0)
+
+    # 2) Durchmesser explizit auf Pixel mappen (z.B. 6–26 px)
+    sd_sizes_short = scaled_diameters(sd_tr_short, min_px=6, max_px=26)
+
+    # 3) Punkte plotten
+    sd_short_position_size_fig.add_trace(
+        go.Scatter(
+            x=filtered_df['Date'],
+            y=filtered_df['Open Interest'],
+            mode='markers',
+            marker=dict(
+                size=sd_sizes_short,  # direkte Pixel-Durchmesser
+                sizemode='diameter',
+                sizeref=1,
+                color=sd_col_short,  # Farbe = Positionsgröße (Short)
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(
+                    title="SD Short Position Size",
+                    thickness=15, len=0.75, yanchor='middle', y=0.5
+                )
+            ),
+            text=[
+                f"Date: {d:%Y-%m-%d}<br>"
+                f"Open Interest: {int(oi):,}<br>"
+                f"Traders (Short): {int(t)}<br>"
+                f"PosSize (avg): {float(ps):,.0f}"
+                for d, oi, t, ps in zip(
+                    filtered_df['Date'],
+                    pd.to_numeric(filtered_df['Open Interest'], errors='coerce').fillna(0),
+                    sd_tr_short,
+                    pd.to_numeric(filtered_df['SDS Position Size'], errors='coerce').fillna(0)
+                )
+            ],
+            hoverinfo='text',
+            showlegend=False
+        )
+    )
+
+    # 4) Bubble-Size-Legende (gleiche Skalierung wie oben)
+    sd_baseS = sd_tr_short[sd_tr_short > 0]
+    if sd_baseS.size >= 3 and sd_baseS.max() > 1:
+        sd_legend_valsS = np.unique(np.round(np.quantile(sd_baseS, [0.25, 0.5, 0.75, 1.0])).astype(int))
+        sd_legend_valsS = sd_legend_valsS[sd_legend_valsS > 0]
+    else:
+        sd_legend_valsS = np.array([10, 20, 35], dtype=int)
+
+    sd_legend_sizesS = scaled_diameters(sd_legend_valsS, min_px=6, max_px=26)
+    for v, s in zip(sd_legend_valsS, sd_legend_sizesS):
+        sd_short_position_size_fig.add_trace(
+            go.Scatter(
+                x=[None], y=[None],
+                mode='markers',
+                marker=dict(size=float(s), sizemode='diameter', sizeref=1, color='gray', opacity=0.6),
+                showlegend=True,
+                name=f"{int(v)} Traders",
+                hoverinfo='skip'
             )
-        ),
-        text=[f"SD Short Pos Size: {v:.0f}" for v in filtered_df['SDS Position Size'].fillna(0)],
-        hoverinfo='text',
-        showlegend=False
-    ))
-    bubble_sizes = dynamic_bubble_sizes(filtered_df['SDS Position Size'])
-    for s in bubble_sizes:
-        sd_short_position_size_fig.add_trace(go.Scatter(
-            x=[0], y=[0], mode='markers', visible='legendonly',
-            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
-            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
-        ))
+        )
+
+    # 5) Layout
     sd_short_position_size_fig.update_layout(
         title='Short Position Size Indicator (Swap Dealers)',
-        xaxis_title='Date', yaxis_title='Open Interest',
-        xaxis=dict(
-            tickmode='array',
-            tickvals=filtered_df['Date'].dt.year.unique(),
-            ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
-            showgrid=True, ticks="outside", tickangle=45
-        ),
-        yaxis=dict(title='Open Interest', showgrid=True, tick0=0),
-        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
+        xaxis_title='Date',
+        yaxis_title='Open Interest',
+        xaxis=dict(showgrid=True, ticks="outside", tickangle=45),
+        yaxis=dict(title='Open Interest', showgrid=True),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.18, y=0.5, font=dict(size=12)),
+        margin=dict(l=60, r=160, t=60, b=60)
     )
-    add_last_point_highlight(sd_short_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
-                             inner_color='black')
+
+    # 6) Optional: letzten Punkt hervorheben
+    try:
+        add_last_point_highlight(
+            fig=sd_short_position_size_fig,
+            df=filtered_df, x_col='Date', y_col='Open Interest',
+            inner_size=2, inner_color='black'
+        )
+    except Exception:
+        pass
 
     long_scaling_factor, short_scaling_factor = calculate_scaling_factors(filtered_df)
 
@@ -1504,26 +1633,6 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
         y=0.5,
         font=dict(size=12)
     ),
-    annotations=[
-        dict(
-            x=1.35,  # Position rechts neben der Legende
-            y=0.01,   # Vertikale Position
-            xref='paper',
-            yref='paper',
-            text=(
-                "Die Punktgrösse im Scatterplot <br>zeigt die Anzahl der Trader:<br>"
-                "- ≤ 50 Trader: Kleinere Punkte<br>"
-                "- 51–100 Trader: Mittlere Punkte<br>"
-                "- 101–150 Trader: Grösste Punkte"
-            ),
-            showarrow=False,
-            align="left",
-            font=dict(
-                size=12,
-                color="black"
-            )
-        )
-    ]
 )
 
 
@@ -1617,114 +1726,253 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
 
     # OR Long Position Size Indicator
     or_long_position_size_fig = go.Figure()
-    or_long_position_size_fig.add_trace(go.Scatter(
-        x=filtered_df['Date'],
-        y=filtered_df['Open Interest'],
-        mode='markers',
-        marker=dict(
-            size=safe_sizes(filtered_df['ORL Position Size']),
-            color=safe_colors(filtered_df['ORL Position Size']),
-            colorscale='Viridis',
-            showscale=True,
-            colorbar=dict(
-                title="OR Long Position Size",
-                thickness=15, len=0.75, yanchor='middle', y=0.5
+
+    # 1) Daten vorbereiten
+    tr_long_raw  = pd.to_numeric(filtered_df['Traders Other Rept Long'], errors='coerce')
+    tr_long = tr_long_raw.fillna(0).clip(lower=0).astype(float)
+
+    # Farbe = Positionsgröße (Long)
+    try:
+        col_long = safe_colors(filtered_df['ORL Position Size'])
+    except Exception:
+        col_long = pd.to_numeric(filtered_df['ORL Position Size'], errors='coerce').fillna(0)
+
+    # 2) Durchmesser explizit auf Pixel mappen (z.B. 6–26 px)
+    sizes_long = scaled_diameters(tr_long, min_px=6, max_px=26)
+
+    # 3) Punkte plotten
+    or_long_position_size_fig.add_trace(
+        go.Scatter(
+            x=filtered_df['Date'],
+            y=filtered_df['Open Interest'],
+            mode='markers',
+            marker=dict(
+                size=sizes_long,  # direkte Pixel-Durchmesser
+                sizemode='diameter',  # Werte = Durchmesser
+                sizeref=1,  # keine weitere Skalierung
+                color=col_long,  # Farbe = Positionsgröße
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(
+                    title="OR Long Position Size",
+                    thickness=15, len=0.75, yanchor='middle', y=0.5
+                )
+            ),
+            text=[
+                f"Date: {d:%Y-%m-%d}<br>"
+                f"Open Interest: {int(oi):,}<br>"
+                f"Traders (Long): {int(t)}<br>"
+                f"PosSize (avg): {float(ps):,.0f}"
+                for d, oi, t, ps in zip(
+                    filtered_df['Date'],
+                    pd.to_numeric(filtered_df['Open Interest'], errors='coerce').fillna(0),
+                    tr_long,
+                    pd.to_numeric(filtered_df['ORL Position Size'], errors='coerce').fillna(0)
+                )
+            ],
+            hoverinfo='text',
+            showlegend=False
+        )
+    )
+
+    # 4) Bubble-Size-Legende (gleiche Skalierung wie oben)
+    base = tr_long[tr_long > 0]
+    if base.size >= 3 and base.max() > 1:
+        legend_vals = np.unique(np.round(np.quantile(base, [0.25, 0.5, 0.75, 1.0])).astype(int))
+        legend_vals = legend_vals[legend_vals > 0]
+    else:
+        legend_vals = np.array([10, 20, 35], dtype=int)
+
+    legend_sizes = scaled_diameters(legend_vals, min_px=6, max_px=26)
+    for v, s in zip(legend_vals, legend_sizes):
+        or_long_position_size_fig.add_trace(
+            go.Scatter(
+                x=[None], y=[None],
+                mode='markers',
+                marker=dict(size=float(s), sizemode='diameter', sizeref=1, color='gray', opacity=0.6),
+                showlegend=True,
+                name=f"{int(v)} Traders",
+                hoverinfo='skip'
             )
-        ),
-        text=[f"OR Long Pos Size: {v:.0f}" for v in filtered_df['ORL Position Size'].fillna(0)],
-        hoverinfo='text',
-        showlegend=False
-    ))
-    bubble_sizes = dynamic_bubble_sizes(filtered_df['ORL Position Size'])
-    for s in bubble_sizes:
-        or_long_position_size_fig.add_trace(go.Scatter(
-            x=[0], y=[0], mode='markers', visible='legendonly',
-            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
-            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
-        ))
+        )
+
+    # 5) Layout
     or_long_position_size_fig.update_layout(
         title='Long Position Size Indicator (Other Reportables)',
-        xaxis_title='Date', yaxis_title='Open Interest',
-        xaxis=dict(
-            tickmode='array',
-            tickvals=filtered_df['Date'].dt.year.unique(),
-            ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
-            showgrid=True, ticks="outside", tickangle=45
-        ),
-        yaxis=dict(title='Open Interest', showgrid=True, tick0=0),
-        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
+        xaxis_title='Date',
+        yaxis_title='Open Interest',
+        xaxis=dict(showgrid=True, ticks="outside", tickangle=45),
+        yaxis=dict(title='Open Interest', showgrid=True),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.18, y=0.5, font=dict(size=12)),
+        margin=dict(l=60, r=160, t=60, b=60)
     )
-    add_last_point_highlight(or_long_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
-                             inner_color='black')
+
+    # 6) Optional: letzten Punkt hervorheben
+    try:
+        add_last_point_highlight(
+            fig=or_long_position_size_fig,
+            df=filtered_df, x_col='Date', y_col='Open Interest',
+            inner_size=2, inner_color='black'
+        )
+    except Exception:
+        pass
 
     # OR Short Position Size Indicator
     or_short_position_size_fig = go.Figure()
-    or_short_position_size_fig.add_trace(go.Scatter(
-        x=filtered_df['Date'],
-        y=filtered_df['Open Interest'],
-        mode='markers',
-        marker=dict(
-            size=safe_sizes(filtered_df['ORS Position Size']),
-            color=safe_colors(filtered_df['ORS Position Size']),
-            colorscale='Viridis',
-            showscale=True,
-            colorbar=dict(
-                title="OR Short Position Size",
-                thickness=15, len=0.75, yanchor='middle', y=0.5
+
+    # 1) Daten vorbereiten
+    tr_short_raw = pd.to_numeric(filtered_df['Traders Other Rept Short'], errors='coerce')
+    tr_short = tr_short_raw.fillna(0).clip(lower=0).astype(float)
+
+    # Farbe = Positionsgröße (Short)
+    try:
+        col_short = safe_colors(filtered_df['ORS Position Size'])
+    except Exception:
+        col_short = pd.to_numeric(filtered_df['ORS Position Size'], errors='coerce').fillna(0)
+
+    # 2) Durchmesser explizit auf Pixel mappen (z.B. 6–26 px)
+    sizes_short = scaled_diameters(tr_short, min_px=6, max_px=26)
+
+    # 3) Punkte plotten
+    or_short_position_size_fig.add_trace(
+        go.Scatter(
+            x=filtered_df['Date'],
+            y=filtered_df['Open Interest'],
+            mode='markers',
+            marker=dict(
+                size=sizes_short,  # direkte Pixel-Durchmesser
+                sizemode='diameter',
+                sizeref=1,
+                color=col_short,  # Farbe = Positionsgröße (Short)
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(
+                    title="OR Short Position Size",
+                    thickness=15, len=0.75, yanchor='middle', y=0.5
+                )
+            ),
+            text=[
+                f"Date: {d:%Y-%m-%d}<br>"
+                f"Open Interest: {int(oi):,}<br>"
+                f"Traders (Short): {int(t)}<br>"
+                f"PosSize (avg): {float(ps):,.0f}"
+                for d, oi, t, ps in zip(
+                    filtered_df['Date'],
+                    pd.to_numeric(filtered_df['Open Interest'], errors='coerce').fillna(0),
+                    tr_short,
+                    pd.to_numeric(filtered_df['ORS Position Size'], errors='coerce').fillna(0)
+                )
+            ],
+            hoverinfo='text',
+            showlegend=False
+        )
+    )
+
+    # 4) Bubble-Size-Legende (gleiche Skalierung wie oben)
+    base_s = tr_short[tr_short > 0]
+    if base_s.size >= 3 and base_s.max() > 1:
+        legend_vals = np.unique(np.round(np.quantile(base_s, [0.25, 0.5, 0.75, 1.0])).astype(int))
+        legend_vals = legend_vals[legend_vals > 0]
+    else:
+        legend_vals = np.array([10, 20, 35], dtype=int)
+
+    legend_sizes = scaled_diameters(legend_vals, min_px=6, max_px=26)
+    for v, s in zip(legend_vals, legend_sizes):
+        or_short_position_size_fig.add_trace(
+            go.Scatter(
+                x=[None], y=[None],
+                mode='markers',
+                marker=dict(size=float(s), sizemode='diameter', sizeref=1, color='gray', opacity=0.6),
+                showlegend=True,
+                name=f"{int(v)} Traders",
+                hoverinfo='skip'
             )
-        ),
-        text=[f"OR Short Pos Size: {v:.0f}" for v in filtered_df['ORS Position Size'].fillna(0)],
-        hoverinfo='text',
-        showlegend=False
-    ))
-    bubble_sizes = dynamic_bubble_sizes(filtered_df['ORS Position Size'])
-    for s in bubble_sizes:
-        or_short_position_size_fig.add_trace(go.Scatter(
-            x=[0], y=[0], mode='markers', visible='legendonly',
-            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
-            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
-        ))
+        )
+
+    # 5) Layout
     or_short_position_size_fig.update_layout(
         title='Short Position Size Indicator (Other Reportables)',
-        xaxis_title='Date', yaxis_title='Open Interest',
-        xaxis=dict(
-            tickmode='array',
-            tickvals=filtered_df['Date'].dt.year.unique(),
-            ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
-            showgrid=True, ticks="outside", tickangle=45
-        ),
-        yaxis=dict(title='Open Interest', showgrid=True, tick0=0),
-        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
+        xaxis_title='Date',
+        yaxis_title='Open Interest',
+        xaxis=dict(showgrid=True, ticks="outside", tickangle=45),
+        yaxis=dict(title='Open Interest', showgrid=True),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.18, y=0.5, font=dict(size=12)),
+        margin=dict(l=60, r=160, t=60, b=60)
     )
-    add_last_point_highlight(or_short_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
-                             inner_color='black')
+
+    # 6) Optional: letzten Punkt hervorheben
+    try:
+        add_last_point_highlight(
+            fig=or_short_position_size_fig,
+            df=filtered_df, x_col='Date', y_col='Open Interest',
+            inner_size=2, inner_color='black'
+        )
+    except Exception:
+        pass
 
     # --- MM Long Position Size Indicator ---
-    long_position_size_fig = go.Figure()  # <-- MUSS vor dem ersten add_trace stehen!
+    long_position_size_fig = go.Figure()
+
+    # 1) Daten vorbereiten (Größe = Anzahl Trader)
+    mm_tr_long_raw = pd.to_numeric(filtered_df['Traders M Money Long'], errors='coerce')
+    mm_tr_long = mm_tr_long_raw.fillna(0).clip(lower=0).astype(float)
+
+    # Farbe = Positionsgröße (Long)
+    try:
+        mm_col_long = safe_colors(filtered_df['MML Position Size'])
+    except Exception:
+        mm_col_long = pd.to_numeric(filtered_df['MML Position Size'], errors='coerce').fillna(0)
+
+    # 2) Durchmesser explizit auf Pixel mappen (z.B. 6–26 px)
+    mm_sizes_long = scaled_diameters(mm_tr_long, min_px=6, max_px=26)
+
+    # 3) Punkte plotten
     long_position_size_fig.add_trace(go.Scatter(
         x=filtered_df['Date'],
         y=filtered_df['Open Interest'],
         mode='markers',
         marker=dict(
-            size=safe_sizes(filtered_df['MML Position Size']),
-            color=safe_colors(filtered_df['MML Position Size']),
+            size=mm_sizes_long,  # direkte Pixel-Durchmesser
+            sizemode='diameter',  # Werte = Durchmesser
+            sizeref=1,  # keine weitere Skalierung
+            color=mm_col_long,  # Farbe = Positionsgröße
             colorscale='Viridis',
             showscale=True,
             colorbar=dict(title="MM Long Position Size", thickness=15, len=0.75, yanchor='middle', y=0.5)
         ),
-        text=[f"MM Long Pos Size: {v:.0f}" for v in filtered_df['MML Position Size'].fillna(0)],
+        text=[
+            f"Date: {d:%Y-%m-%d}<br>"
+            f"Open Interest: {int(oi):,}<br>"
+            f"Traders (Long): {int(t)}<br>"
+            f"PosSize (avg): {float(ps):,.0f}"
+            for d, oi, t, ps in zip(
+                filtered_df['Date'],
+                pd.to_numeric(filtered_df['Open Interest'], errors='coerce').fillna(0),
+                mm_tr_long,
+                pd.to_numeric(filtered_df['MML Position Size'], errors='coerce').fillna(0)
+            )
+        ],
         hoverinfo='text',
         showlegend=False
     ))
 
-    # Dynamische Legende (nur Legende sichtbar)
-    for s in dynamic_bubble_sizes(filtered_df['MML Position Size']):
+    # 4) Bubble-Size-Legende (gleiche Skalierung wie oben)
+    base = mm_tr_long[mm_tr_long > 0]
+    if base.size >= 3 and base.max() > 1:
+        legend_vals = np.unique(np.round(np.quantile(base, [0.25, 0.5, 0.75, 1.0])).astype(int))
+        legend_vals = legend_vals[legend_vals > 0]
+    else:
+        legend_vals = np.array([10, 20, 35], dtype=int)
+
+    legend_sizes = scaled_diameters(legend_vals, min_px=6, max_px=26)
+    for v, s in zip(legend_vals, legend_sizes):
         long_position_size_fig.add_trace(go.Scatter(
-            x=[0], y=[0], mode='markers', visible='legendonly',
-            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
-            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
+            x=[None], y=[None], mode='markers',
+            marker=dict(size=float(s), sizemode='diameter', sizeref=1, color='gray', opacity=0.6),
+            showlegend=True, name=f"{int(v)} Traders", hoverinfo='skip'
         ))
 
+    # 5) Layout
     long_position_size_fig.update_layout(
         title='Long Position Size Indicator (Money Managers)',
         xaxis_title='Date', yaxis_title='Open Interest',
@@ -1734,38 +1982,84 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
             ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
             showgrid=True, ticks="outside", tickangle=45
         ),
-        yaxis=dict(title='Open Interest', showgrid=True, tick0=0,
-                   dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000),
-        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
+        yaxis=dict(
+            title='Open Interest', showgrid=True, tick0=0,
+            dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000
+        ),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12)),
+        margin=dict(l=60, r=160, t=60, b=60)
     )
-    add_last_point_highlight(long_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
-                             inner_color='black')
+
+    # 6) Optional: letzten Punkt hervorheben
+    try:
+        add_last_point_highlight(long_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
+                                 inner_color='black')
+    except Exception:
+        pass
 
     # --- MM Short Position Size Indicator ---
-    short_position_size_fig = go.Figure()  # <-- ebenfalls vor add_trace
+    short_position_size_fig = go.Figure()
+
+    # 1) Daten vorbereiten (Größe = Anzahl Trader)
+    mm_tr_short_raw = pd.to_numeric(filtered_df['Traders M Money Short'], errors='coerce')
+    mm_tr_short = mm_tr_short_raw.fillna(0).clip(lower=0).astype(float)
+
+    # Farbe = Positionsgröße (Short)
+    try:
+        mm_col_short = safe_colors(filtered_df['MMS Position Size'])
+    except Exception:
+        mm_col_short = pd.to_numeric(filtered_df['MMS Position Size'], errors='coerce').fillna(0)
+
+    # 2) Durchmesser explizit auf Pixel mappen (z.B. 6–26 px)
+    mm_sizes_short = scaled_diameters(mm_tr_short, min_px=6, max_px=26)
+
+    # 3) Punkte plotten
     short_position_size_fig.add_trace(go.Scatter(
         x=filtered_df['Date'],
         y=filtered_df['Open Interest'],
         mode='markers',
         marker=dict(
-            size=safe_sizes(filtered_df['MMS Position Size']),
-            color=safe_colors(filtered_df['MMS Position Size']),
+            size=mm_sizes_short,  # direkte Pixel-Durchmesser
+            sizemode='diameter',
+            sizeref=1,
+            color=mm_col_short,  # Farbe = Positionsgröße
             colorscale='Viridis',
             showscale=True,
             colorbar=dict(title="MM Short Position Size", thickness=15, len=0.75, yanchor='middle', y=0.5)
         ),
-        text=[f"MM Short Pos Size: {v:.0f}" for v in filtered_df['MMS Position Size'].fillna(0)],
+        text=[
+            f"Date: {d:%Y-%m-%d}<br>"
+            f"Open Interest: {int(oi):,}<br>"
+            f"Traders (Short): {int(t)}<br>"
+            f"PosSize (avg): {float(ps):,.0f}"
+            for d, oi, t, ps in zip(
+                filtered_df['Date'],
+                pd.to_numeric(filtered_df['Open Interest'], errors='coerce').fillna(0),
+                mm_tr_short,
+                pd.to_numeric(filtered_df['MMS Position Size'], errors='coerce').fillna(0)
+            )
+        ],
         hoverinfo='text',
         showlegend=False
     ))
 
-    for s in dynamic_bubble_sizes(filtered_df['MMS Position Size']):
+    # 4) Bubble-Size-Legende (gleiche Skalierung wie oben)
+    base_s = mm_tr_short[mm_tr_short > 0]
+    if base_s.size >= 3 and base_s.max() > 1:
+        legend_vals = np.unique(np.round(np.quantile(base_s, [0.25, 0.5, 0.75, 1.0])).astype(int))
+        legend_vals = legend_vals[legend_vals > 0]
+    else:
+        legend_vals = np.array([10, 20, 35], dtype=int)
+
+    legend_sizes = scaled_diameters(legend_vals, min_px=6, max_px=26)
+    for v, s in zip(legend_vals, legend_sizes):
         short_position_size_fig.add_trace(go.Scatter(
-            x=[0], y=[0], mode='markers', visible='legendonly',
-            marker=dict(size=safe_sizes(pd.Series([s])).iat[0], color='gray', opacity=0.6),
-            showlegend=True, name=f"{s} Traders", hoverinfo='skip'
+            x=[None], y=[None], mode='markers',
+            marker=dict(size=float(s), sizemode='diameter', sizeref=1, color='gray', opacity=0.6),
+            showlegend=True, name=f"{int(v)} Traders", hoverinfo='skip'
         ))
 
+    # 5) Layout
     short_position_size_fig.update_layout(
         title='Short Position Size Indicator (Money Managers)',
         xaxis_title='Date', yaxis_title='Open Interest',
@@ -1775,12 +2069,20 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
             ticktext=[str(y) for y in filtered_df['Date'].dt.year.unique()],
             showgrid=True, ticks="outside", tickangle=45
         ),
-        yaxis=dict(title='Open Interest', showgrid=True, tick0=0,
-                   dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000),
-        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12))
+        yaxis=dict(
+            title='Open Interest', showgrid=True, tick0=0,
+            dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000
+        ),
+        legend=dict(title=dict(text="Number of Traders"), itemsizing='trace', x=1.2, y=0.5, font=dict(size=12)),
+        margin=dict(l=60, r=160, t=60, b=60)
     )
-    add_last_point_highlight(short_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
-                             inner_color='black')
+
+    # 6) Optional: letzten Punkt hervorheben
+    try:
+        add_last_point_highlight(short_position_size_fig, filtered_df, 'Date', 'Open Interest', inner_size=2,
+                                 inner_color='black')
+    except Exception:
+        pass
 
     # --- Dry Powder Indicator---
     dry_powder_fig = go.Figure()
