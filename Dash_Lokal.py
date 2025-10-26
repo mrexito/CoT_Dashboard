@@ -316,6 +316,28 @@ def rel_concentration(oi_long, oi_short, total_oi):
     tot = nz(total_oi).replace(0, np.nan)  # Division durch 0 vermeiden
     return 100.0 * ((oiL / tot) - (oiS / tot))
 
+def scale_marker_sizes(series, min_px=6, max_px=28, n_legend=4):
+    s = pd.to_numeric(series, errors='coerce').replace([np.inf, -np.inf], np.nan)
+    if s.notna().sum() == 0:
+        # Fallback: alles gleich klein
+        return pd.Series(min_px, index=series.index), []
+    vmin, vmax = float(s.min()), float(s.max())
+    if not np.isfinite(vmin) or not np.isfinite(vmax):
+        return pd.Series(min_px, index=series.index), []
+    if vmax == vmin:
+        # konstante Serie -> mittlere Punktgrösse
+        px = pd.Series((min_px + max_px) / 2.0, index=series.index)
+        legends = [(vmin, (min_px + max_px) / 2.0)]
+        return px, legends
+
+    scaled = (s - vmin) / (vmax - vmin)
+    px = min_px + scaled * (max_px - min_px)
+
+    legend_vals = np.linspace(vmin, vmax, n_legend)
+    legend_px   = min_px + ((legend_vals - vmin) / (vmax - vmin)) * (max_px - min_px)
+    return px, list(zip(legend_vals, legend_px))
+
+
 # Example calculation
 median_oi, median_traders = calculate_medians(df_pivoted)
 
@@ -506,9 +528,9 @@ app.layout = html.Div([
                 <div style="text-align:center">\( \text{range} = \text{one-year rolling} \)</div>
 
                 **Bedeutung der Abkürzungen:**  
-                - **MML (S):** Managed Money Long (Short) Positionen  
-                - **T%:** Percentage distribution of positions  
-                - **TTF:** Total number of traders trading futures
+                - **MML (S):** Long- (Short-) Positionen der Managed Money-Händler
+                - **T%:** prozentuale Verteilung der Positionen
+                - **TTF:** Gesamtanzahl der Händler, die Futures handeln
                 """, mathjax=True, dangerously_allow_html=True),
 
                 dcc.Graph(id='long-clustering-graph'),
@@ -594,18 +616,15 @@ app.layout = html.Div([
                 Dabei wird die Grösse der Long- und Short-Positionen (*Open Interest*) mit der Anzahl der Trader 
                 in einer bestimmten Gruppe (z. B. Money Managers) in Beziehung gesetzt.
 
-                Das Ziel der DP-Analyse ist es, einschätzen zu können, ob bestehende Positionen noch ausgebaut werden 
+                Das **Ziel der DP-Analyse** ist es, einschätzen zu können, ob bestehende Positionen noch ausgebaut werden 
                 können oder ob sie anfällig für Liquidationen sind. DP-Indikatoren werden in Diagrammen dargestellt 
                 und können direkt als Handelssignale genutzt werden, um Marktchancen und Risiken besser zu bewerten.
 
-                Zudem ist die DP-Analyse sehr flexibel: Sie kann in verschiedenen Varianten angewandt werden, 
-                z. B. durch Umrechnung in Dollar-Exposures oder durch die Verwendung normalisierter Kennzahlen wie der *Concentration*.
-
                 **Berechnung:**
 
-                **Achsen (Zeitpunkt \(t\)):**  
-                - **x-Achse:** Anzahl der Trader in der jeweiligen Gruppe.  
-                - **y-Achse:** Grösse der offenen Positionen (Open Interest).  
+                Achsen (Zeitpunkt $(t)$):
+                - **x-Achse:** Anzahl der Trader in der jeweiligen Gruppe
+                - **y-Achse:** Grösse der offenen Positionen (Open Interest)
 
                 $$
                 x_{\mathrm{MML}}(t) = N_{\mathrm{MML}}(t), 
@@ -623,10 +642,10 @@ app.layout = html.Div([
                 Die Fläche der Bubbles zeigt, wie gross die Gesamtposition (Long + Short) im Verhältnis ist – je grösser die Bubble, desto mehr offene Kontrakte (Open Interest) liegen vor.
 
                 **Begriffe:**  
-                - $OI$ (*Open Interest*): Anzahl offener Kontrakte (Long bzw. Short) einer Gruppe zu einem Zeitpunkt.  
-                - $N_{\mathrm{MML}}, N_{\mathrm{MMS}}$: Anzahl Trader (Money Manager Long bzw. Short).  
-                - **Farbkodierung:** Dunkelblau = MML-Wolke (Long-Seite), Hellblau = MMS-Wolke (Short-Seite).  
-                - **Schwarzer Punkt:** jeweils die **aktuellste Woche**.
+                - $OI$ (*Open Interest*): Anzahl offener Kontrakte (Long bzw. Short) einer Gruppe zu einem Zeitpunkt
+                - $N_{\mathrm{MML}}, N_{\mathrm{MMS}}$: Anzahl Trader (Money Manager Long bzw. Short)
+                - **Farbkodierung:** Dunkelblau = MML-Wolke (Long-Seite), Hellblau = MMS-Wolke (Short-Seite)
+                - **Schwarzer Punkt:** jeweils die **aktuellste Woche**
                 """, mathjax=True),
 
                 dcc.Graph(id='dry-powder-indicator-graph')
@@ -643,16 +662,16 @@ app.layout = html.Div([
                 anhand des Open Interest und stellt die Konzentration der Tradergruppen dar. Dadurch lassen sich verschiedene Märkte 
                 oder Tradergruppen innerhalb eines Marktes direkt vergleichen.
 
-                Das Ziel des Indikators ist es, die Positionierungsprofile von Märkten vollständig zu visualisieren und Unterschiede 
+                Das **Ziel des Indikators** ist es, die Positionierungsprofile von Märkten vollständig zu visualisieren und Unterschiede 
                 sichtbar zu machen – etwa zwischen verwandten Rohstoffen wie Mais und Sojabohnen oder zwischen WTI und Brent. 
                 Dadurch können Rückschlüsse auf zukünftige Marktbewegungen, Hedging-Verhalten und potenzielle Spreadausweitungen 
                 gezogen werden.
 
                 **Berechnung:**
 
-                **Achsen (Zeitpunkt \(t\)):**  
-                - **x-Achse:** Anzahl Trader in der jeweiligen Gruppe (Long oder Short).  
-                - **y-Achse:** Relative Concentration \(RC_G(t)\), d. h. die Nettopositionierung der Gruppe \(G\) relativ zum gesamten Open Interest.  
+                Achsen (Zeitpunkt $(t)$):
+                - **x-Achse:** Anzahl Trader in der jeweiligen Gruppe (Long oder Short)
+                - **y-Achse:** Relative Concentration $(RC_G(t))$, d. h. die Nettopositionierung der Gruppe $(G$) relativ zum gesamten Open Interest 
 
                 $$
                 x_G(t) = N_G(t),
@@ -675,10 +694,10 @@ app.layout = html.Div([
                   $\sigma_G = -1$ für Short-Serien (MMS, ORS, PMPUS, SDS)
 
                 **Begriffe:**  
-                - $OI$ (*Open Interest*): Anzahl aller offenen Kontrakte.  
-                - $N_G$: Anzahl Trader in Gruppe \(G\).  
-                - $RC_G(t)$: Relative Concentration (in Prozentpunkten) einer Gruppe.  
-                - **Schwarzer Punkt:** markiert den Wert der **aktuellsten Woche** je Tradergruppe.
+                - $OI$ (*Open Interest*): Anzahl aller offenen Kontrakte
+                - $N_G$: Anzahl Trader in Gruppe \(G\)
+                - $RC_G(t)$: Relative Concentration (in Prozentpunkten) einer Gruppe
+                - **Schwarzer Punkt:** markiert den Wert der **aktuellsten Woche** je Tradergruppe
                 """, mathjax=True),
 
                 dcc.Graph(id='dp-relative-concentration-graph')
@@ -691,13 +710,13 @@ app.layout = html.Div([
                 html.H1("DP Seasonal Indicator"),
 
                 dcc.Markdown(r"""
-                **Dry Powder Seasonal Indicators** sind spezielle DP-Indikatoren, die saisonale Muster im Traderverhalten 
-                sichtbar machen. Dabei werden Positionen nicht nur nach Grösse und Anzahl der Trader, sondern zusätzlich 
+                Der **Dry Powder Seasonal Indicator** ist ein spezieller DP-Indikatoren, der saisonale Muster im Traderverhalten 
+                sichtbar macht. Dabei werden Positionen nicht nur nach Grösse und Anzahl der Trader, sondern zusätzlich 
                 nach Zeitabschnitten (z. B. Monate oder Quartale) dargestellt.
 
-                Das Ziel dieser Indikatoren ist es, saisonale Hedging-Muster oder Abweichungen davon zu erkennen. 
+                **Das Ziel dieses Indikator** ist es, saisonale Hedging-Muster oder Abweichungen davon zu erkennen. 
                 So lassen sich etwa typische Verhaltensweisen von Produzenten oder Konsumenten in bestimmten Jahreszeiten 
-                aufzeigen (z. B. stärkere Hedging-Aktivität im Winter bei Heizöl). Gleichzeitig helfen sie, potenzielle 
+                aufzeigen (z. B. stärkere Hedging-Aktivität im Winter bei Heizöl). Gleichzeitig hilt er, potenzielle 
                 Anomalien oder Unterabsicherungen zu identifizieren, die ein Risiko für Preisbewegungen darstellen könnten.
                 
                 **Berechnung:**
@@ -708,8 +727,8 @@ app.layout = html.Div([
                 
                 wobei  
                 
-                - $N_q(t)$: Anzahl der Trader im Quartal \(q\) zum Zeitpunkt \(t\).  
-                - $RC_q(t)$: *Relative Concentration* der Tradergruppe im Quartal \(q\).  
+                - $N_q(t)$: Anzahl der Trader im Quartal $(q$) zum Zeitpunkt $(t$)
+                - $RC_q(t)$: *Relative Concentration* der Tradergruppe im Quartal $(q$).  
                 """, mathjax=True),
 
                 dcc.Graph(id='dp-seasonal-indicator-graph')
@@ -719,23 +738,23 @@ app.layout = html.Div([
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H1("DP Net Indicators with Medians"),
+                html.H1("DP Net Indicator with Median"),
 
                 dcc.Markdown(r"""
-                **Dry Powder Net Indicators** kombinieren Informationen zu Netto-Open-Interest und Netto-Anzahl von Tradern. 
+                Der **Dry Powder Net Indicator** kombiniert Informationen zu Netto-Open-Interest und Netto-Anzahl von Tradern. 
                 Dadurch lassen sich Abweichungen zwischen Positionsgrösse und Traderanzahl sichtbar machen, die Hinweise 
                 auf mögliche Wendepunkte im Markt geben können.
 
-                Das Ziel dieser Indikatoren ist es, ein klareres Bild der Netto-Positionierung zu liefern und Extremwerte 
+                Das **Ziel dieses Indikators** ist es, ein klareres Bild der Netto-Positionierung zu liefern und Extremwerte 
                 besser einzuordnen. So können Situationen erkannt werden, in denen z. B. das Open Interest eine Long-Position 
                 zeigt, die Mehrheit der Trader aber Short positioniert ist. Zudem lassen sich auch Spread-Positionen analysieren, 
                 um einzuschätzen, ob diese sich in extremeren Marktphasen (z. B. Contango oder Backwardation) verstärken könnten.
 
-                **Berechnung**
+                **Berechnung:**
 
-                **Achsen (Zeitpunkt \(t\)):**  
-                - **x-Achse:** Netto-Anzahl Money-Manager-Trader.  
-                - **y-Achse:** Netto-Open-Interest der Money Manager.
+                Achsen (Zeitpunkt $(t)$):
+                - **x-Achse:** Netto-Anzahl Money-Manager-Trader
+                - **y-Achse:** Netto-Open-Interest der Money Manager
                 
                 $$
                 x(t)=N^{\text{Net}}(t)=N^{\text{Long}}(t)-N^{\text{Short}}(t),
@@ -751,7 +770,7 @@ app.layout = html.Div([
                 $$
                 
                 **Variablen (mit Datenbezug):**
-                - $t$: Kalenderwoche/Beobachtungszeitpunkt innerhalb des gewählten Datumsbereichs.  
+                - $t$: Kalenderwoche/Beobachtungszeitpunkt innerhalb des gewählten Datumsbereichs
                 - $N^{\text{Long}}(t)$: Anzahl **Long-Trader (MM)** zum Zeitpunkt $t$  
                 - $N^{\text{Short}}(t)$: Anzahl **Short-Trader (MM)** zum Zeitpunkt $t$  
                 - $N^{\text{Net}}(t)$: **Netto-Traderzahl** $=\;N^{\text{Long}}(t)-N^{\text{Short}}(t)$
@@ -767,14 +786,14 @@ app.layout = html.Div([
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H1("Dry Powder Position Size Indicator"),
+                html.H1("DP Position Size Indicator"),
 
                 dcc.Markdown(r"""
                 Der **Dry Powder Position Size Indicator** verknüpft die durchschnittliche Positionsgrösse von Tradern 
                 mit der Preisentwicklung eines Rohstoffs. Dabei wird die Positionsgrösse (y-Achse) gegen die Anzahl der Trader 
                 (x-Achse) dargestellt, wobei die Farben die jeweilige Preisrange markieren.
 
-                Das Ziel dieses Indikators ist es, Zusammenhänge zwischen Positionsgrössen und Marktpreisen sichtbar zu machen. 
+                Das **Ziel dieses Indikators** ist es, Zusammenhänge zwischen Positionsgrössen und Marktpreisen sichtbar zu machen. 
                 So lassen sich Muster erkennen, etwa dass Long-Trader bei tieferen Preisen grössere Positionen halten 
                 (stärkeres Engagement), während bei höheren Preisen die Traderzahl sinkt. Auf der Short-Seite hingegen treten 
                 oft uneinheitlichere Muster auf, was auf unterschiedliche Handelsstrategien wie Spread- oder 
@@ -783,7 +802,7 @@ app.layout = html.Div([
                 Insgesamt hilft der Indikator, Unterschiede im Verhalten von Long- und Short-Tradern zu analysieren 
                 und Rückschlüsse auf ihre Handelsmotive (z. B. direktional vs. relative Value) zu ziehen.
 
-                **Berechnung und Variablen:**
+                **Berechnung:**
 
                 Achsen:
                 $$
@@ -796,9 +815,9 @@ app.layout = html.Div([
                 $$
                 \text{color}_g(t)\;\propto\;\mathrm{OI}_g(t)
                 $$
-                - $\mathrm{OI}_g(t)$: Open Interest zum Zeitpunkt $t$, d. h. die gesamte Anzahl offener Kontrakte.  
+                - $\mathrm{OI}_g(t)$: Open Interest zum Zeitpunkt $t$, d. h. die gesamte Anzahl offener Kontrakte
                 - Die **Farbe eines Punktes** zeigt somit an, wie hoch das Open Interest in der jeweiligen Woche war 
-                  (je heller/gelber, desto höher das Open Interest).
+                  (je heller/gelber, desto höher das Open Interest)
                 """, mathjax=True),
 
                 dcc.RadioItems(
@@ -817,7 +836,7 @@ app.layout = html.Div([
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H1("Dry Powder Hedging Indicator"),
+                html.H1("DP Hedging Indicator"),
 
                 dcc.Markdown(r"""
                 **Dry Powder Hedging Indicators** erweitern die klassische DP-Analyse, indem sie mehrere Tradergruppen 
@@ -876,90 +895,94 @@ app.layout = html.Div([
         html.Hr(),  # Separator
         dbc.Row([
             dbc.Col([
-                html.H2("Dry Powder Concentration/Clustering Indicator"),
+                html.H2("DP Concentration / Clustering Indicator"),
 
                 dcc.Markdown(r"""
-                Der **Dry Powder Concentration/Clustering Indicator** kombiniert die Konzepte von Konzentration 
+                Der **Dry Powder Concentration / Clustering Indicator** kombiniert die Konzepte von Konzentration 
                 (Open Interest-Anteil) und Clustering (Anzahl Trader) in einem DP-Chart. Er zeigt, wie extrem die 
                 Positionierung einer Tradergruppe im Vergleich zu ihrer historischen Spanne ist.
 
-                Das Ziel des Indikators ist es, relative Handelschancen zwischen ähnlichen Märkten oder Rohstoffen 
+                Das **Ziel des Indikators** ist es, relative Handelschancen zwischen ähnlichen Märkten oder Rohstoffen 
                 aufzuzeigen, indem Positionierungsunterschiede sichtbar gemacht werden. Befinden sich z. B. beide 
                 Kennzahlen in einem Extrembereich, steigt die Wahrscheinlichkeit, dass ein Markt im Falle eines 
                 Preisschocks stärker reagiert als ein anderer.
                 
                 **Berechnung:**
-
-                **1) Clustering (je Zeitpunkt $t$)**
                 
-                Rohanteil der Trader (Gruppe $g$ in Markt $m$):  
-                $
-                \mathrm{ClustShare}^{\text{raw}}_g(m,t)=\frac{T_g(m,t)}{TT_F(m,t)}
-                $
+                **1) Clustering je Zeitpunkt $(t)$**
                 
-                Rolling-Normierung über ein Jahr (historische Spanne je Markt – „one-year rolling“):  
-                $
-                \mathrm{ClustShare}^{\text{roll}}_g(m,t)
-                =\frac{\mathrm{ClustShare}^{\text{raw}}_g(m,t)-\min_{\tau\in\mathcal{W}_{365}}\mathrm{ClustShare}^{\text{raw}}_g(m,\tau)}
-                {\max_{\tau\in\mathcal{W}_{365}}\mathrm{ClustShare}^{\text{raw}}_g(m,\tau)-\min_{\tau\in\mathcal{W}_{365}}\mathrm{ClustShare}^{\text{raw}}_g(m,\tau)}\cdot100
-                $
+                Rohanteil der Gruppe $(g)$ an allen Futures-Tradern:
+                $$
+                \mathrm{ClustShare}^{\mathrm{raw}}_g(m,t)=\frac{T_g(m,t)}{TT_F(m,t)}
+                $$
+                - Anteil der Trader der Gruppe \(g\) an der Gesamtzahl aller Futures-Trader im Markt
+                - Skaliert zwischen 0 und 1 (später normiert), unabhängig von der absoluten Traderzahl
                 
-                **Zeitliche Aggregation** im gewählten Fenster $[t_0,t_1]$:  
-                $
-                \overline{\mathrm{ClustShare}}^{\text{roll}}_g(m)
-                =\frac{1}{|[t_0,t_1]|}\sum_{t=t_0}^{t_1}\mathrm{ClustShare}^{\text{roll}}_g(m,t)
-                $
+                Rolling-Normierung (1-Jahresfenster $\mathcal{W}_{365}$):
+                $$
+                \mathrm{ClustShare}^{\mathrm{roll}}_g(m,t)=
+                \frac{\mathrm{ClustShare}^{\mathrm{raw}}_g(m,t)-\min_{\tau\in\mathcal{W}_{365}}\mathrm{ClustShare}^{\mathrm{raw}}_g(m,\tau)}
+                {\max_{\tau\in\mathcal{W}_{365}}\mathrm{ClustShare}^{\mathrm{raw}}_g(m,\tau)-\min_{\tau\in\mathcal{W}_{365}}\mathrm{ClustShare}^{\mathrm{raw}}_g(m,\tau)}\cdot100
+                $$
+                - Setzt den aktuellen Rohanteil in Relation zur eigenen 1-Jahres-Historie dieses Marktes 
+                - Ergebnis ist 0–100: 0 = historisches Jahres-Minimum, 100 = Jahres-Maximum
                 
-                **2) Concentration (je Zeitpunkt $t$)**
+                Zeitliche Aggregation im Fenster $[t_0,t_1]$:
+                $$
+                \overline{\mathrm{ClustShare}}^{\mathrm{roll}}_g(m)=
+                \frac{1}{|[t_0,t_1]|}\sum_{t=t_0}^{t_1}\mathrm{ClustShare}^{\mathrm{roll}}_g(m,t)
+                $$
+                - Glättet kurzfristiges Rauschen über das gewählte Analysefenster
+                - Liefert einen repräsentativen Durchschnittswert statt eines Einzelzeitpunkts
                 
-                Relative Concentration als **Netto-Kontrakte** (Long minus Short):  
-                $
-                \mathrm{RelConc}^{\text{raw}}_g(m,t)=OI^{L}_g(m,t)-OI^{S}_g(m,t)
-                $
+                **2) Concentration je Zeitpunkt $(t)$**
                 
-                **Zeitliche Aggregation** im Fenster $[t_0,t_1]$:  
-                $
-                \overline{\mathrm{RelConc}}^{\text{raw}}_g(m)
-                =\frac{1}{|[t_0,t_1]|}\sum_{t=t_0}^{t_1}\mathrm{RelConc}^{\text{raw}}_g(m,t)
-                $
+                Netto-Kontrakte (Long minus Short):
+                $$
+                \mathrm{RelConc}^{\mathrm{raw}}_g(m,t)=OI^{L}_g(m,t)-OI^{S}_g(m,t)
+                $$
+                - Misst die Richtung und Stärke der Positionierung der Gruppe $(g)$
+                - Positive Werte ⇒ Netto-Long; negative ⇒ Netto-Short
+                
+                Zeitliche Aggregation im Fenster $[t_0,t_1]$:
+                $$
+                \overline{\mathrm{RelConc}}^{\mathrm{raw}}_g(m)=
+                \frac{1}{|[t_0,t_1]|}\sum_{t=t_0}^{t_1}\mathrm{RelConc}^{\mathrm{raw}}_g(m,t)
+                $$
+                - Mittelt die Netto-Position über das Analysefenster
+                - Reduziert Ausreisser, betont die **persistente** Positionierung
                 
                 **3) Range-Normalisierung über alle Märkte (0–100)**
                 
-                $
+                Clustering – Vergleichbarkeit über Märkte:
+                $$
                 \mathrm{ClusteringRange}_g(m)=
-                \frac{\overline{\mathrm{ClustShare}}^{\text{roll}}_g(m)-\min_{m'}\overline{\mathrm{ClustShare}}^{\text{roll}}_g(m')}
-                {\max_{m'}\overline{\mathrm{ClustShare}}^{\text{roll}}_g(m')-\min_{m'}\overline{\mathrm{ClustShare}}^{\text{roll}}_g(m')}\cdot100
-                $
+                \frac{\overline{\mathrm{ClustShare}}^{\mathrm{roll}}_g(m)-\min_{m'}\overline{\mathrm{ClustShare}}^{\mathrm{roll}}_g(m')}
+                {\max_{m'}\overline{\mathrm{ClustShare}}^{\mathrm{roll}}_g(m')-\min_{m'}\overline{\mathrm{ClustShare}}^{\mathrm{roll}}_g(m')}\cdot100
+                $$
+                - Min-Max-Scaling quer über alle Märkte für die Cluster-Kennzahl
+                - 0 = niedrigster Markt im Sample, 100 = höchster ⇒ direkt vergleichbar
                 
-                $
+                Concentration – Vergleichbarkeit über Märkte:
+                $$
                 \mathrm{ConcentrationRange}_g(m)=
-                \frac{\overline{\mathrm{RelConc}}^{\text{raw}}_g(m)-\min_{m'}\overline{\mathrm{RelConc}}^{\text{raw}}_g(m')}
-                {\max_{m'}\overline{\mathrm{RelConc}}^{\text{raw}}_g(m')-\min_{m'}\overline{\mathrm{RelConc}}^{\text{raw}}_g(m')}\cdot100
-                $
+                \frac{\overline{\mathrm{RelConc}}^{\mathrm{raw}}_g(m)-\min_{m'}\overline{\mathrm{RelConc}}^{\mathrm{raw}}_g(m')}
+                {\max_{m'}\overline{\mathrm{RelConc}}^{\mathrm{raw}}_g(m')-\min_{m'}\overline{\mathrm{RelConc}}^{\mathrm{raw}}_g(m')}\cdot100
+                $$
+                - Min-Max-Scaling quer über alle Märkte für die Netto-Position
+                - Macht Märkte mit unterschiedlichen OI-Skalen vergleichbar auf 0–100
                 
-                **4) Punkte im Plot (je Markt $m$)**
-                
-                $
+                **4) Punkt im Plot (für Markt $(m)$)**
+                $$
                 x_m=\mathrm{ClusteringRange}_g(m),\qquad
                 y_m=\mathrm{ConcentrationRange}_g(m)
-                $
+                $$
+                - Jeder Markt wird ein Punkt $(x_m, y_m)$ im Scatter-Plot
                 
-                **Variablen & Bedeutungen**
-                
-                - $g$: Tradergruppe (z. B. MML/MMS).  
-                - $m$: Markt/Rohstoff (z. B. Gold, Copper).  
-                - $t$: Woche (Report Date).  
-                - $T_g(m,t)$: Anzahl Trader der Gruppe $g$.  
-                - $TT_F(m,t)$: Gesamtzahl **aller** Futures-Trader im Markt.  
-                - $OI^L_g, OI^S_g$: Long- bzw. Short-Open-Interest (Kontrakte) der Gruppe $g$.  
-                - $\mathcal{W}_{365}$: rollendes 1-Jahres-Fenster zur historischen Min-Max-Normierung.  
-                - Range-Normalisierung: lineares Min-Max-Scaling **über Märkte** (macht die Werte vergleichbar auf 0–100).
-                
-                **Interpretation**
-                
-                - **Clustering hoch ($x$ nahe 100)**: Im Vergleich zu Historie & anderen Märkten stark von Gruppe $g$ „gecrowded“.  
-                - **Concentration hoch ($y$ nahe 100)**: Markt zeigt (nach Zeitglättung) einen hohen Netto-Kontrakt-Überhang zugunsten der Gruppe $g$.  
-                - **Oben rechts** (hoch/hoch): doppelt extrem → Markt tendiert bei Schocks zu stärkeren Moves; **unten links**: unauffällig.
+                **Interpretation:**
+                - **Clustering hoch ($x$ nahe 100)**: Im Vergleich zu Historie & anderen Märkten stark von Gruppe $g$ „gecrowded“
+                - **Concentration hoch ($y$ nahe 100)**: Markt zeigt (nach Zeitglättung) einen hohen Netto-Kontrakt-Überhang zugunsten der Gruppe $g$
+                - **Oben rechts** (hoch/hoch): doppelt extrem → Markt tendiert bei Schocks zu stärkeren Moves; **unten links**: unauffällig
                 """, mathjax=True),
 
                 dcc.DatePickerRange(
@@ -1143,72 +1166,128 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
 
     # PMPU Long Position Size Indicator
     pmpu_long_position_size_fig = go.Figure()
-    pmpu_long_position_size_fig.add_trace(go.Scatter(
-        x=filtered_df['Date'],
-        y=filtered_df['Open Interest'],
-        mode='markers',
-        marker=dict(
-            size=safe_sizes(filtered_df['PMPUL Position Size']),
-            color=safe_colors(filtered_df['PMPUL Position Size']),
-            colorscale='Viridis',
-            showscale=True,
-            colorbar=dict(
-                title="PMPU Long Position Size",
-                thickness=15,
-                len=0.75,
-                yanchor='middle',
-                y=0.5
-            )
-        ),
-        text=[f"PMPU Long Pos Size: {v:.0f}" for v in filtered_df['PMPUL Position Size'].fillna(0)],
-        hoverinfo='text',
-        showlegend=False
-    ))
 
-    # Bubble-Size-Legende
-    bubble_sizes = dynamic_bubble_sizes(filtered_df['PMPUL Position Size'])
+    # 1) Daten vorbereiten
+    tr_long_raw = pd.to_numeric(filtered_df['Traders Prod/Merc Long'], errors='coerce')
+    tr_long = tr_long_raw.fillna(0).clip(lower=0).astype(float)  # keine NaNs/negativen Werte
 
-    for s in bubble_sizes:
-        pmpu_long_position_size_fig.add_trace(go.Scatter(
-            x=[0], y=[0],  # real point so sizing is honored
+    # Farbe bleibt Positionsgröße (wie bisher)
+    # Falls du keine safe_colors(df[col]) Helper-Funktion hast, nutze einfach die Spalte direkt.
+    try:
+        col_long = safe_colors(filtered_df['PMPUL Position Size'])
+    except Exception:
+        col_long = pd.to_numeric(filtered_df['PMPUL Position Size'], errors='coerce').fillna(0)
+
+    # 2) Bubble-Skalierung (Fläche ∝ Traderzahl) + Fallbacks
+    desired_max_px = 26  # max. sichtbarer Durchmesser
+    desired_min_px = 6  # min. Durchmesser (auch wenn Traderzahl sehr klein/0)
+
+    max_traders = float(tr_long.max()) if np.isfinite(tr_long.max()) else 0.0
+    if max_traders <= 0:
+        # komplett leere/NA-Daten: nicht crashen, mini-Bubbles anzeigen
+        tr_long[:] = 1.0
+        max_traders = 1.0
+
+    sizeref_traders_long = 2.0 * max_traders / (desired_max_px ** 2)
+
+    # 3) Punkte plotten
+    pmpu_long_position_size_fig.add_trace(
+        go.Scatter(
+            x=filtered_df['Date'],
+            y=filtered_df['Open Interest'],
             mode='markers',
-            visible='legendonly',  # only show in legend (not on plot)
             marker=dict(
-                size=safe_sizes(pd.Series([s])).iat[0],  # pixel size
-                color='gray',
-                opacity=0.6
+                size=tr_long,  # <-- Größe = Number of Traders (PMPU Long)
+                sizemode='area',
+                sizeref=sizeref_traders_long,
+                sizemin=desired_min_px,
+                color=col_long,  # <-- Farbe = Positionsgröße
+                colorscale='Viridis',
+                showscale=True,
+                colorbar=dict(
+                    title="PMPU Long Position Size",
+                    thickness=15,
+                    len=0.75,
+                    yanchor='middle',
+                    y=0.5
+                )
             ),
-            showlegend=True,
-            name=f"{s} Traders",
-            hoverinfo='skip'
-        ))
+            text=[
+                f"Date: {d:%Y-%m-%d}<br>"
+                f"Open Interest: {int(oi):,}<br>"
+                f"Traders (Long): {int(t)}<br>"
+                f"PosSize (avg): {float(ps):,.0f}"
+                for d, oi, t, ps in zip(
+                    filtered_df['Date'],
+                    pd.to_numeric(filtered_df['Open Interest'], errors='coerce').fillna(0),
+                    tr_long,
+                    pd.to_numeric(filtered_df['PMPUL Position Size'], errors='coerce').fillna(0)
+                )
+            ],
+            hoverinfo='text',
+            showlegend=False
+        )
+    )
 
+    # 4) Bubble-Size-Legende (nutzt dieselbe sizeref!)
+    base = tr_long[tr_long > 0]
+    if base.size >= 3 and base.max() > 1:
+        legend_vals = np.unique(np.round(np.quantile(base, [0.25, 0.5, 0.75, 1.0])).astype(int))
+        legend_vals = legend_vals[legend_vals > 0]
+    else:
+        legend_vals = np.array([10, 50, 100], dtype=int)
+
+    for v in legend_vals:
+        pmpu_long_position_size_fig.add_trace(
+            go.Scatter(
+                x=[None], y=[None],  # reine Legendeneinträge
+                mode='markers',
+                marker=dict(
+                    size=float(v),
+                    sizemode='area',
+                    sizeref=sizeref_traders_long,
+                    sizemin=desired_min_px,
+                    color='gray',
+                    opacity=0.6
+                ),
+                showlegend=True,
+                name=f"{int(v)} Traders",
+                hoverinfo='skip'
+            )
+        )
+
+    # 5) Layout
     pmpu_long_position_size_fig.update_layout(
         title='Long Position Size Indicator (PMPU)',
         xaxis_title='Date',
         yaxis_title='Open Interest',
         xaxis=dict(
-            tickmode='array',
-            tickvals=filtered_df['Date'].dt.year.unique(),
-            ticktext=[str(year) for year in filtered_df['Date'].dt.year.unique()],
-            showgrid=True, ticks="outside", tickangle=45
+            showgrid=True,
+            ticks="outside",
+            tickangle=45
         ),
         yaxis=dict(
-            title='Open Interest', showgrid=True, tick0=0,
-            dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000
+            title='Open Interest',
+            showgrid=True
         ),
         legend=dict(
             title=dict(text="Number of Traders"),
-            itemsizing='trace',  # ensure legend respects trace marker sizes
-            x=1.2, y=0.5,
+            itemsizing='trace',
+            x=1.18, y=0.5,
             font=dict(size=12)
+        ),
+        margin=dict(l=60, r=160, t=60, b=60)
+    )
+
+    # 6) Letzten Punkt hervorheben (falls du die Helper-Funktion hast)
+    try:
+        add_last_point_highlight(
+            fig=pmpu_long_position_size_fig,
+            df=filtered_df, x_col='Date', y_col='Open Interest',
+            inner_size=2, inner_color='black'
         )
-    )
-    add_last_point_highlight(
-        fig=pmpu_long_position_size_fig,
-        df=filtered_df, x_col='Date', y_col='Open Interest',
-        inner_size=2, inner_color='black'
-    )
+    except Exception:
+        pass
 
     # PMPU Short Position Size Indicator
     pmpu_short_position_size_fig = go.Figure()
