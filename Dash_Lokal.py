@@ -195,6 +195,8 @@ default_end_date = df_pivoted['Date'].max()
 # Define the default start date (6 months prior to the end date)
 default_start_date = default_end_date - timedelta(days=182)
 
+
+
 def get_global_xaxis():
     return dict(
         tickmode='array',
@@ -257,7 +259,6 @@ def dynamic_bubble_sizes(series, steps=5):
     return np.linspace(max_rounded / steps, max_rounded, steps, dtype=int).tolist()
 
 def col(df, name):
-    """Gibt immer eine numerische Series zurück (NaN, falls Spalte fehlt)."""
     if name in df:
         return pd.to_numeric(df[name], errors='coerce')
     return pd.Series(np.nan, index=df.index, dtype='float64')
@@ -370,12 +371,10 @@ app.layout = html.Div([
                     id='overview-table',
                     columns=[
                         {'name': 'Trader Group', 'id': 'Trader Group'},
-                        {'name': 'Long', 'id': 'Long'},
-                        {'name': 'Short', 'id': 'Short'},
-                        {'name': 'Spread', 'id': 'Spread'},
-                        {'name': 'Difference (Long %)', 'id': 'Difference (Long %)'},
-                        {'name': 'Difference (Short %)', 'id': 'Difference (Short %)'},
-                        {'name': 'Difference (Spread %)', 'id': 'Difference (Spread %)'},
+                        {'name': 'Positions (OI)', 'id': 'Positions', 'presentation': 'markdown'},  # <-- neu
+                        {'name': 'Δ Long %', 'id': 'Difference (Long %)'},
+                        {'name': 'Δ Short %', 'id': 'Difference (Short %)'},
+                        {'name': 'Δ Spread %', 'id': 'Difference (Spread %)'},
                         {'name': 'Total Traders', 'id': 'Total Traders'},
                         {'name': '% of Traders', 'id': '% of Traders'},
                         {'name': 'Number of Traders', 'id': 'Number of Traders', 'presentation': 'markdown'},
@@ -394,24 +393,50 @@ app.layout = html.Div([
                          "rule": "display: block;"},
                         {"selector": 'th[data-dash-column="Number of Traders"]::after',
                          "rule": (
-                                 "content: 'Long   Short   Spread';"
-                                 "display: block;"
-                                 "margin-top: 4px;"
-                                 "font-size: 11px;"
-                                 "color: #444;"
-                                 "line-height: 1.3;"
-                                 "padding-left: 18px;"
-                                 "word-spacing: 26px;"
-                                 "background-image: "
-                                 "radial-gradient(circle, #2ca02c 0, #2ca02c 100%),"
-                                 "radial-gradient(circle, #d62728 0, #d62728 100%),"
-                                 "radial-gradient(circle, #1f77b4 0, #1f77b4 100%);"
-                                 "background-repeat: no-repeat;"
-                                 "background-size: 10px 10px, 10px 10px, 10px 10px;"
-                "background-position: 2px 55%, 60px 55%, 120px 55%;"
-            )}
+                             "content: 'Long   Short   Spread';"
+                             "display: block;"
+                             "margin-top: 4px;"
+                             "font-size: 11px;"
+                             "color: #444;"
+                             "line-height: 1.3;"
+                             "padding-left: 18px;"
+                             "word-spacing: 26px;"
+                             "background-image: "
+                             "radial-gradient(circle, #2ca02c 0, #2ca02c 100%),"
+                             "radial-gradient(circle, #d62728 0, #d62728 100%),"
+                             "radial-gradient(circle, #1f77b4 0, #1f77b4 100%);"
+                             "background-repeat: no-repeat;"
+                             "background-size: 10px 10px, 10px 10px, 10px 10px;"
+                             "background-position: 2px 55%, 60px 55%, 120px 55%;"
+                         )},
+                        {"selector": 'th[data-dash-column="Positions"]',
+                         "rule": "white-space: normal;"},
+                        {"selector": 'th[data-dash-column="Positions"] .column-header-name',
+                         "rule": "display: block;"},
+                        {"selector": 'th[data-dash-column="Positions"]::after',
+                         "rule": (
+                             "content: 'Long   Short   Spread';"
+                             "display: block;"
+                             "margin-top: 4px;"
+                             "font-size: 11px;"
+                             "color: #444;"
+                             "line-height: 1.3;"
+                             "padding-left: 18px;"
+                             "word-spacing: 26px;"
+                             "background-image: "
+                             "radial-gradient(circle, #2ca02c 0, #2ca02c 100%),"
+                             "radial-gradient(circle, #d62728 0, #d62728 100%),"
+                             "radial-gradient(circle, #1f77b4 0, #1f77b4 100%);"
+                             "background-repeat: no-repeat;"
+                             "background-size: 10px 10px, 10px 10px, 10px 10px;"
+                             "background-position: 2px 55%, 60px 55%, 120px 55%;"
+                         )},
                     ],
-                    style_cell_conditional=[
+                style_cell_conditional=[
+                        {'if': {'column_id': 'Positions'},
+                         'whiteSpace': 'normal', 'height': 'auto',
+                         'minWidth': '260px', 'width': '260px', 'maxWidth': '260px'},
+
                         {'if': {'column_id': 'Number of Traders'},
                          'whiteSpace': 'normal', 'height': 'auto',
                          'minWidth': '260px', 'width': '260px', 'maxWidth': '260px'}
@@ -543,40 +568,41 @@ app.layout = html.Div([
             dbc.Col(
                 dcc.Markdown(
                     r"""
-        Der **Position Size Indicator** misst die durchschnittliche Grösse der Positionen einzelner Trader, 
-        indem die gesamte Positionsgrösse durch die Anzahl der beteiligten Trader geteilt wird. Dadurch wird sichtbar, 
-        wie stark die Überzeugung (*conviction*) innerhalb einer Tradergruppe ist.
+                Der **Position Size Indicator** misst die durchschnittliche Grösse der Positionen einzelner Trader, 
+                indem die gesamte Positionsgrösse durch die Anzahl der beteiligten Trader geteilt wird. Dadurch wird sichtbar, 
+                wie stark die Überzeugung (*conviction*) innerhalb einer Tradergruppe ist.
 
-        Das **Ziel des Indikators** ist es, die durchschnittliche Positionsgrösse und damit die Intensität des Engagements von Tradern transparenter zu machen. 
-        Er kombiniert Daten zu *Open Interest* und *Traderanzahl*, um Rückschlüsse auf die Verteilung von Positionen entlang der Fälligkeiten 
-        (*down the curve*) zu ziehen. Zudem lassen sich über Positionslimits erkennen, wie stark Positionen konzentriert sind und welche 
-        Auswirkungen ein Abbau dieser Positionen auf Preise und Marktstruktur haben könnte.
-        
-        **Farbskala:** Die Punktfarbe zeigt die *durchschnittliche Positionsgrösse* in der jeweiligen Tradergruppe. 
-        Helle Farben = grössere Positionen pro Trader, dunkle Farben = kleinere Positionen.
+                Das **Ziel des Indikators** ist es, die durchschnittliche Positionsgrösse und damit die Intensität des Engagements von Tradern transparenter zu machen. 
+                Er kombiniert Daten zu *Open Interest* und *Traderanzahl*, um Rückschlüsse auf die Verteilung von Positionen entlang der Fälligkeiten 
+                (*down the curve*) zu ziehen. Zudem lassen sich über Positionslimits erkennen, wie stark Positionen konzentriert sind und welche 
+                Auswirkungen ein Abbau dieser Positionen auf Preise und Marktstruktur haben könnte.
 
-        **Berechnung:**
+                **Farbskala:** Die Punktfarbe zeigt die *durchschnittliche Positionsgrösse* in der jeweiligen Gruppe. 
+                Helle Farben = grössere Positionen pro Trader, dunkle Farben = kleinere Positionen.
 
-        $$
-        \text{Position Size}_{\text{trader category}} =
-        \frac{\text{Open Interest}_{\text{trader category}}}
-        {\text{Number of Traders}_{\text{trader category}}}
-        $$
+                **Berechnung:**
 
-        wobei
-        $$
-        \text{trader category} = \{\mathrm{MM}(L,S),\, \mathrm{PMPU}(L,S),\, \mathrm{OR}(L,S),\, \mathrm{SD}(L,S)\}
-        $$
-        
-        **Bedeutung der Abkürzungen:**
-        - **PMPU:** Producer/Merchant/Processor/User
-        - **SD:** Swap Dealer
-        - **MM:** Managed Money
-        - **OR:** Other Reportables
-        - **L:** Long Positionen
-        - **S:** Short Positionen
-        """,
-                    mathjax=True),
+                $$
+                \text{Position Size}_{G} =
+                \frac{\text{Open Interest}_{G}}
+                {\text{Number of Traders}_{G}}
+                $$
+
+                wobei
+                $$
+                G \in \{\mathrm{MM}\text{-}L,\, \mathrm{MM}\text{-}S,\, \mathrm{PMPU}\text{-}L,\, \mathrm{PMPU}\text{-}S,\, \mathrm{SD}\text{-}L,\, \mathrm{SD}\text{-}S,\, \mathrm{OR}\text{-}L,\, \mathrm{OR}\text{-}S\}
+                $$
+
+                **Bedeutung der Abkürzungen:**
+                - **PMPU:** Producer/Merchant/Processor/User
+                - **SD:** Swap Dealer
+                - **MM:** Managed Money
+                - **OR:** Other Reportables
+                - **L:** Long Positionen
+                - **S:** Short Positionen
+                """,
+                    mathjax=True
+                ),
         width=12)]),
         dbc.Row([dbc.Col([html.H2("Producer/Merchant/Processor/User (PMPU)")], width=12)]),
         dbc.Row([
@@ -615,7 +641,7 @@ app.layout = html.Div([
 
                 **Berechnung:**
 
-                Achsen (Zeitpunkt $(t)$):
+                Achsen (Zeitpunkt $$(t)$$):
                 - **x-Achse:** Anzahl der Trader in der jeweiligen Gruppe
                 - **y-Achse:** Grösse der offenen Positionen (Open Interest)
 
@@ -649,11 +675,11 @@ app.layout = html.Div([
         dbc.Row([
             dbc.Col([
                 html.H1("DP Relative Concentration Indicator"),
-
-                dcc.Markdown(r"""
-                Der **Dry Powder Relative Concentration Indicator (DP Relative Concentration)** normalisiert Positionen 
-                anhand des Open Interest und stellt die Konzentration der Tradergruppen dar. Dadurch lassen sich verschiedene Märkte 
-                oder Tradergruppen innerhalb eines Marktes direkt vergleichen.
+                dcc.Markdown(
+                    r"""
+                Der **DP Relative Concentration Indicator** normalisiert Positionen 
+                anhand des Open Interest und stellt die Konzentration der Gruppen dar. Dadurch lassen sich verschiedene Märkte 
+                oder Gruppen innerhalb eines Marktes direkt vergleichen.
 
                 Das **Ziel des Indikators** ist es, die Positionierungsprofile von Märkten vollständig zu visualisieren und Unterschiede 
                 sichtbar zu machen – etwa zwischen verwandten Rohstoffen wie Mais und Sojabohnen oder zwischen WTI und Brent. 
@@ -664,7 +690,7 @@ app.layout = html.Div([
 
                 Achsen (Zeitpunkt $(t)$):
                 - **x-Achse:** Anzahl Trader in der jeweiligen Gruppe (Long oder Short)
-                - **y-Achse:** Relative Concentration $(RC_G(t))$, d. h. die Nettopositionierung der Gruppe $(G$) relativ zum gesamten Open Interest 
+                - **y-Achse:** Relative Concentration $(RC_G(t))$, d. h. die Nettopositionierung der Gruppe $(G)$ relativ zum gesamten Open Interest
 
                 $$
                 x_G(t) = N_G(t),
@@ -678,21 +704,27 @@ app.layout = html.Div([
                 RC_G(t) = 100 \cdot \sigma_G \left( \frac{L_G(t)}{OI(t)} - \frac{S_G(t)}{OI(t)} \right)
                 $$
 
-                wobei  
-                - $L_G(t)$: Long Open Interest der Gruppe \(G\)  
-                - $S_G(t)$: Short Open Interest der Gruppe \(G\)  
-                - $OI(t)$: Gesamtes Open Interest zum Zeitpunkt \(t\)  
-                - $N_G(t)$: Anzahl Trader (Long oder Short) der Gruppe \(G\)  
-                - $\sigma_G = +1$ für Long-Serien (MML, ORL, PMPUL, SDL),  
-                  $\sigma_G = -1$ für Short-Serien (MMS, ORS, PMPUS, SDS)
+                wobei
+                $$
+                G \in \{\mathrm{MM}\text{-}L,\, \mathrm{MM}\text{-}S,\, \mathrm{PMPU}\text{-}L,\, \mathrm{PMPU}\text{-}S,\, \mathrm{SD}\text{-}L,\, \mathrm{SD}\text{-}S,\, \mathrm{OR}\text{-}L,\, \mathrm{OR}\text{-}S\}
+                $$
+
+                und  
+                - $L_G(t)$: Long Open Interest der Gruppe $G$  
+                - $S_G(t)$: Short Open Interest der Gruppe $G$  
+                - $OI(t)$: Gesamtes Open Interest zum Zeitpunkt $t$  
+                - $N_G(t)$: Anzahl Trader (Long oder Short) der Gruppe $G$  
+                - $\sigma_G = +1$ für Long-Serien (MM-L, OR-L, PMPU-L, SD-L),  
+                  $\sigma_G = -1$ für Short-Serien (MM-S, OR-S, PMPU-S, SD-S)
 
                 **Begriffe:**  
                 - $OI$ (*Open Interest*): Anzahl aller offenen Kontrakte
-                - $N_G$: Anzahl Trader in Gruppe \(G\)
+                - $N_G$: Anzahl Trader in Gruppe $G$
                 - $RC_G(t)$: Relative Concentration (in Prozentpunkten) einer Gruppe
-                - **Schwarzer Punkt:** markiert den Wert der **aktuellsten Woche** je Tradergruppe
-                """, mathjax=True),
-
+                - **Schwarzer Punkt:** markiert den Wert der **aktuellsten Woche** je Gruppe
+                """,
+                    mathjax=True
+                ),
                 dcc.Graph(id='dp-relative-concentration-graph')
             ], width=12)
         ]),
@@ -703,7 +735,7 @@ app.layout = html.Div([
                 html.H1("DP Seasonal Indicator"),
 
                 dcc.Markdown(r"""
-                Der **Dry Powder Seasonal Indicator** ist ein spezieller DP-Indikatoren, der saisonale Muster im Traderverhalten 
+                Der **DP Seasonal Indicator** ist ein spezieller DP-Indikatoren, der saisonale Muster im Traderverhalten 
                 sichtbar macht. Dabei werden Positionen nicht nur nach Grösse und Anzahl der Trader, sondern zusätzlich 
                 nach Zeitabschnitten (z. B. Monate oder Quartale) dargestellt.
 
@@ -734,7 +766,7 @@ app.layout = html.Div([
                 html.H1("DP Net Indicator with Median"),
 
                 dcc.Markdown(r"""
-                Der **Dry Powder Net Indicator** kombiniert Informationen zu Netto-Open-Interest und Netto-Anzahl von Tradern. 
+                Der **DP Net Indicator** kombiniert Informationen zu Netto-Open-Interest und Netto-Anzahl von Tradern. 
                 Dadurch lassen sich Abweichungen zwischen Positionsgrösse und Traderanzahl sichtbar machen, die Hinweise 
                 auf mögliche Wendepunkte im Markt geben können.
 
@@ -782,7 +814,7 @@ app.layout = html.Div([
                 html.H1("DP Position Size Indicator"),
 
                 dcc.Markdown(r"""
-                Der **Dry Powder Position Size Indicator** verknüpft die durchschnittliche Positionsgrösse von Tradern 
+                Der **DP Position Size Indicator** verknüpft die durchschnittliche Positionsgrösse von Tradern 
                 mit der Preisentwicklung eines Rohstoffs. Dabei wird die Positionsgrösse (y-Achse) gegen die Anzahl der Trader 
                 (x-Achse) dargestellt, wobei die Farben die jeweilige Preisrange markieren.
 
@@ -832,7 +864,7 @@ app.layout = html.Div([
                 html.H1("DP Hedging Indicator"),
 
                 dcc.Markdown(r"""
-                **Dry Powder Hedging Indicators** erweitern die klassische DP-Analyse, indem sie mehrere Tradergruppen 
+                **DP Hedging Indicators** erweitern die klassische DP-Analyse, indem sie mehrere Tradergruppen 
                 gleichzeitig betrachten – typischerweise Money Manager (MM) und Produzenten/Verbraucher (PMPU). 
                 So wird sichtbar, wie viel „Dry Powder“ (Spielraum für zusätzliche Positionen) eine Gruppe im Verhältnis 
                 zu einer anderen noch hat.
@@ -891,7 +923,7 @@ app.layout = html.Div([
                 html.H2("DP Concentration / Clustering Indicator"),
 
                 dcc.Markdown(r"""
-                Der **Dry Powder Concentration / Clustering Indicator** kombiniert die Konzepte von Konzentration 
+                Der **DP Concentration / Clustering Indicator** kombiniert die Konzepte von Konzentration 
                 (Open Interest-Anteil) und Clustering (Anzahl Trader) in einem DP-Chart. Er zeigt, wie extrem die 
                 Positionierung einer Tradergruppe im Vergleich zu ihrer historischen Spanne ist.
 
@@ -1008,6 +1040,39 @@ app.layout = html.Div([
     ], fluid=True)
 ])
 
+def positions_bar(long_val, short_val, spread_val=None, bar_width_px=220, height_px=14):
+    lv = 0 if pd.isna(long_val) else float(long_val)
+    sv = 0 if pd.isna(short_val) else float(short_val)
+    sp = 0 if (spread_val is None or pd.isna(spread_val)) else float(spread_val)
+
+    lv = max(lv, 0)
+    sv = max(sv, 0)
+    sp = max(sp, 0)
+
+    total = lv + sv + sp
+    if total <= 0:
+        return f"<div style='width:{bar_width_px}px;height:{height_px}px;border:1px solid #ccc;border-radius:3px;'></div>"
+
+    p_long  = 100 * lv / total
+    p_short = 100 * sv / total
+    p_spread = 100 * sp / total
+
+    spread_div = f"<div title='Spread: {int(sp)}' style='width:{p_spread:.2f}%;background:#1f77b4;'></div>" if sp > 0 else ""
+    spread_txt = f", <b>Spread:</b> {int(sp)}" if sp > 0 else ""
+
+    return (
+        f"<div style='width:{bar_width_px}px;display:flex;flex-direction:column;'>"
+        f"  <div style='display:flex;width:100%;height:{height_px}px;border:1px solid #ccc;border-radius:3px;overflow:hidden;'>"
+        f"    <div title='Long: {int(lv)}'  style='width:{p_long:.2f}%;background:#2ca02c;'></div>"
+        f"    <div title='Short: {int(sv)}' style='width:{p_short:.2f}%;background:#d62728;'></div>"
+        f"    {spread_div}"
+        f"  </div>"
+        f"  <div style='font-size:11px;margin-top:4px;font-family:\"Courier New\", Courier, monospace;'>"
+        f"    <b>Long:</b> {int(lv)}, <b>Short:</b> {int(sv)}{spread_txt}"
+        f"  </div>"
+        f"</div>"
+    )
+
 def traders_bar(long_val, short_val, spread_val=None, bar_width_px=220, height_px=14):
     lv = 0 if pd.isna(long_val) else float(long_val)
     sv = 0 if pd.isna(short_val) else float(short_val)
@@ -1047,14 +1112,23 @@ def traders_bar(long_val, short_val, spread_val=None, bar_width_px=220, height_p
     ]
 )
 def update_table(selected_market, start_date, end_date):
-    filtered_df = df_pivoted[(df_pivoted['Market Names'] == selected_market) & 
-                             (df_pivoted['Date'] >= start_date) & (df_pivoted['Date'] <= end_date)]
+    filtered_df = df_pivoted[
+        (df_pivoted['Market Names'] == selected_market) &
+        (df_pivoted['Date'] >= start_date) &
+        (df_pivoted['Date'] <= end_date)
+    ]
 
     if filtered_df.empty:
         return []
 
     first_row = filtered_df.iloc[0]
     current_row = filtered_df.iloc[-1]
+
+    def safe_pct_change(curr, first):
+        # verhindert Division durch 0 / NaN
+        if pd.isna(first) or float(first) == 0:
+            return 0
+        return round(((float(curr) - float(first)) / float(first)) * 100, 2)
 
     data = {
         'Trader Group': [
@@ -1063,56 +1137,71 @@ def update_table(selected_market, start_date, end_date):
             'Managed Money',
             'Other Reportables'
         ],
-        'Long': [
-            first_row['Producer/Merchant/Processor/User Long'],
-            first_row['Swap Dealer Long'],
-            first_row['Managed Money Long'],
-            first_row['Other Reportables Long']
+        'Positions': [
+            positions_bar(
+                first_row['Producer/Merchant/Processor/User Long'],
+                first_row['Producer/Merchant/Processor/User Short'],
+                None
+            ),
+            positions_bar(
+                first_row['Swap Dealer Long'],
+                first_row['Swap Dealer Short'],
+                first_row['Swap Dealer Spread']
+            ),
+            positions_bar(
+                first_row['Managed Money Long'],
+                first_row['Managed Money Short'],
+                first_row['Managed Money Spread']
+            ),
+            positions_bar(
+                first_row['Other Reportables Long'],
+                first_row['Other Reportables Short'],
+                first_row['Other Reportables Spread']
+            ),
         ],
-        'Short': [
-            first_row['Producer/Merchant/Processor/User Short'],
-            first_row['Swap Dealer Short'],
-            first_row['Managed Money Short'],
-            first_row['Other Reportables Short']
-        ],
-        'Spread': [
-            0,  # Assuming no spread for Producer/Merchant/Processor/User
-            first_row['Swap Dealer Spread'],
-            first_row['Managed Money Spread'],
-            first_row['Other Reportables Spread']
-        ],
+
         'Difference (Long %)': [
-            round(((current_row['Producer/Merchant/Processor/User Long'] - first_row['Producer/Merchant/Processor/User Long']) / first_row['Producer/Merchant/Processor/User Long']) * 100, 2),
-            round(((current_row['Swap Dealer Long'] - first_row['Swap Dealer Long']) / first_row['Swap Dealer Long']) * 100, 2),
-            round(((current_row['Managed Money Long'] - first_row['Managed Money Long']) / first_row['Managed Money Long']) * 100, 2),
-            round(((current_row['Other Reportables Long'] - first_row['Other Reportables Long']) / first_row['Other Reportables Long']) * 100, 2)
+            safe_pct_change(current_row['Producer/Merchant/Processor/User Long'], first_row['Producer/Merchant/Processor/User Long']),
+            safe_pct_change(current_row['Swap Dealer Long'], first_row['Swap Dealer Long']),
+            safe_pct_change(current_row['Managed Money Long'], first_row['Managed Money Long']),
+            safe_pct_change(current_row['Other Reportables Long'], first_row['Other Reportables Long'])
         ],
         'Difference (Short %)': [
-            round(((current_row['Producer/Merchant/Processor/User Short'] - first_row['Producer/Merchant/Processor/User Short']) / first_row['Producer/Merchant/Processor/User Short']) * 100, 2),
-            round(((current_row['Swap Dealer Short'] - first_row['Swap Dealer Short']) / first_row['Swap Dealer Short']) * 100, 2),
-            round(((current_row['Managed Money Short'] - first_row['Managed Money Short']) / first_row['Managed Money Short']) * 100, 2),
-            round(((current_row['Other Reportables Short'] - first_row['Other Reportables Short']) / first_row['Other Reportables Short']) * 100, 2)
+            safe_pct_change(current_row['Producer/Merchant/Processor/User Short'], first_row['Producer/Merchant/Processor/User Short']),
+            safe_pct_change(current_row['Swap Dealer Short'], first_row['Swap Dealer Short']),
+            safe_pct_change(current_row['Managed Money Short'], first_row['Managed Money Short']),
+            safe_pct_change(current_row['Other Reportables Short'], first_row['Other Reportables Short'])
         ],
         'Difference (Spread %)': [
-            0,  # Assuming no spread for Producer/Merchant/Processor/User
-            round(((current_row['Swap Dealer Spread'] - first_row['Swap Dealer Spread']) / first_row['Swap Dealer Spread']) * 100, 2),
-            round(((current_row['Managed Money Spread'] - first_row['Managed Money Spread']) / first_row['Managed Money Spread']) * 100, 2),
-            round(((current_row['Other Reportables Spread'] - first_row['Other Reportables Spread']) / first_row['Other Reportables Spread']) * 100, 2)
+            0,  # PMPU hat bei dir keinen Spread
+            safe_pct_change(current_row['Swap Dealer Spread'], first_row['Swap Dealer Spread']),
+            safe_pct_change(current_row['Managed Money Spread'], first_row['Managed Money Spread']),
+            safe_pct_change(current_row['Other Reportables Spread'], first_row['Other Reportables Spread'])
         ],
+
         'Total Traders': [
             current_row['Traders Prod/Merc Long'] + current_row['Traders Prod/Merc Short'],
             current_row['Traders Swap Long'] + current_row['Traders Swap Short'] + current_row['Traders Swap Spread'],
-            current_row['Traders M Money Long'] + current_row['Traders M Money Short'] + current_row[
-                'Traders M Money Spread'],
-            current_row['Traders Other Rept Long'] + current_row['Traders Other Rept Short'] + current_row[
-                'Traders Other Rept Spread']
+            current_row['Traders M Money Long'] + current_row['Traders M Money Short'] + current_row['Traders M Money Spread'],
+            current_row['Traders Other Rept Long'] + current_row['Traders Other Rept Short'] + current_row['Traders Other Rept Spread']
         ],
         '% of Traders': [
-            f"Long: {round(current_row['Traders Prod/Merc Long'] / current_row['Total Number of Traders'] * 100, 2)}%, Short: {round(current_row['Traders Prod/Merc Short'] / current_row['Total Number of Traders'] * 100, 2)}%",
-            f"Long: {round(current_row['Traders Swap Long'] / current_row['Total Number of Traders'] * 100, 2)}%, Short: {round(current_row['Traders Swap Short'] / current_row['Total Number of Traders'] * 100, 2)}%, Spread: {round(current_row['Traders Swap Spread'] / current_row['Total Number of Traders'] * 100, 2)}%",
-            f"Long: {round(current_row['Traders M Money Long'] / current_row['Total Number of Traders'] * 100, 2)}%, Short: {round(current_row['Traders M Money Short'] / current_row['Total Number of Traders'] * 100, 2)}%, Spread: {round(current_row['Traders M Money Spread'] / current_row['Total Number of Traders'] * 100, 2)}%",
-            f"Long: {round(current_row['Traders Other Rept Long'] / current_row['Total Number of Traders'] * 100, 2)}%, Short: {round(current_row['Traders Other Rept Short'] / current_row['Total Number of Traders'] * 100, 2)}%, Spread: {round(current_row['Traders Other Rept Spread'] / current_row['Total Number of Traders'] * 100, 2)}%"
+            f"Long: {round(current_row['Traders Prod/Merc Long'] / current_row['Total Number of Traders'] * 100, 2)}%, "
+            f"Short: {round(current_row['Traders Prod/Merc Short'] / current_row['Total Number of Traders'] * 100, 2)}%",
+
+            f"Long: {round(current_row['Traders Swap Long'] / current_row['Total Number of Traders'] * 100, 2)}%, "
+            f"Short: {round(current_row['Traders Swap Short'] / current_row['Total Number of Traders'] * 100, 2)}%, "
+            f"Spread: {round(current_row['Traders Swap Spread'] / current_row['Total Number of Traders'] * 100, 2)}%",
+
+            f"Long: {round(current_row['Traders M Money Long'] / current_row['Total Number of Traders'] * 100, 2)}%, "
+            f"Short: {round(current_row['Traders M Money Short'] / current_row['Total Number of Traders'] * 100, 2)}%, "
+            f"Spread: {round(current_row['Traders M Money Spread'] / current_row['Total Number of Traders'] * 100, 2)}%",
+
+            f"Long: {round(current_row['Traders Other Rept Long'] / current_row['Total Number of Traders'] * 100, 2)}%, "
+            f"Short: {round(current_row['Traders Other Rept Short'] / current_row['Total Number of Traders'] * 100, 2)}%, "
+            f"Spread: {round(current_row['Traders Other Rept Spread'] / current_row['Total Number of Traders'] * 100, 2)}%"
         ],
+
         'Number of Traders': [
             traders_bar(current_row['Traders Prod/Merc Long'],  current_row['Traders Prod/Merc Short'],  None),
             traders_bar(current_row['Traders Swap Long'],       current_row['Traders Swap Short'],       current_row['Traders Swap Spread']),
