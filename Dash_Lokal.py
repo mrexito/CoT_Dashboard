@@ -52,31 +52,36 @@ df_pivoted.columns.name = None
 df_pivoted.rename(columns={'_time': 'Date', 'market_names': 'Market Names'}, inplace=True)
 
 # Berechnung der Spalte 'Total Number of Traders'
-df_pivoted['Total Number of Traders'] = df_pivoted[['Traders Prod/Merc Short', 'Traders Swap Long', 'Traders M Money Long']].sum(axis=1)
+df_pivoted = df_pivoted.sort_values(['Market Names', 'Date'])
 
-# Berechnung von MML (S) T% für Long und Short
-df_pivoted['MML_Long_T_Percent'] = df_pivoted['Managed Money Long'] / df_pivoted['Total Number of Traders']
-df_pivoted['MML_Short_T_Percent'] = df_pivoted['Managed Money Short'] / df_pivoted['Total Number of Traders']
+# 1) Total Traders (TTF)
+TOTAL_TRADERS_COL = 'Total Traders'
+df_pivoted['Total Number of Traders'] = df_pivoted[TOTAL_TRADERS_COL]
 
-# Berechnung der Clustering Range für Long Positionen
+# 2) Anteil Trader in Gruppe (nicht Open Interest!)
+df_pivoted['MM_Long_share']  = df_pivoted['Traders M Money Long']  / df_pivoted['Total Number of Traders']
+df_pivoted['MM_Short_share'] = df_pivoted['Traders M Money Short'] / df_pivoted['Total Number of Traders']
+
+def clustering_0_100(s, window=52, minp=10):
+    rmin = s.rolling(window, min_periods=minp).min()
+    rmax = s.rolling(window, min_periods=minp).max()
+    denom = (rmax - rmin).replace(0, np.nan)
+    out = 100 * (s - rmin) / denom
+    return out.clip(0, 100)
+
+# 3) 1 Jahr = ~52 Wochen, und pro Markt (keine Markt-Mischung)
 df_pivoted['Long Clustering'] = (
-    (df_pivoted['MML_Long_T_Percent'] - df_pivoted['MML_Long_T_Percent'].rolling(365, min_periods=1).min())
-    / (df_pivoted['MML_Long_T_Percent'].rolling(365, min_periods=1).max() - df_pivoted['MML_Long_T_Percent'].rolling(365, min_periods=1).min())
-) * 100
+    df_pivoted.groupby('Market Names')['MM_Long_share']
+    .transform(lambda s: clustering_0_100(s, window=52))
+)
 
-# Berechnung der Clustering Range für Short Positionen
 df_pivoted['Short Clustering'] = (
-    (df_pivoted['MML_Short_T_Percent'] - df_pivoted['MML_Short_T_Percent'].rolling(365, min_periods=1).min())
-    / (df_pivoted['MML_Short_T_Percent'].rolling(365, min_periods=1).max() - df_pivoted['MML_Short_T_Percent'].rolling(365, min_periods=1).min())
-) * 100
-
-
+    df_pivoted.groupby('Market Names')['MM_Short_share']
+    .transform(lambda s: clustering_0_100(s, window=52))
+)
 
 df_pivoted['Rolling Min'] = df_pivoted['Producer/Merchant/Processor/User Long'].rolling(365, min_periods=1).min()
 df_pivoted['Rolling Max'] = df_pivoted['Producer/Merchant/Processor/User Long'].rolling(365, min_periods=1).max()
-
-# Assuming there's a column for the number of traders
-df_pivoted['Total Number of Traders'] = df_pivoted[['Traders Prod/Merc Short', 'Traders Swap Long', 'Traders M Money Long']].sum(axis=1)
 
 # Define size categories for traders
 df_pivoted['Trader Size'] = pd.cut(
@@ -332,6 +337,20 @@ def scaled_diameters(vals, min_px=6, max_px=26):
     # Linear skalieren auf Durchmesser (Pixel)
     return np.interp(v, (lo, hi), (min_px, max_px))
 
+def scaled_diameters_rank(vals, min_px=6, max_px=45, gamma=0.8):
+
+    s = pd.to_numeric(pd.Series(vals), errors='coerce').fillna(0).clip(lower=0)
+
+    # alles gleich / keine Variation -> konstante Größe
+    if s.nunique(dropna=False) <= 1:
+        return np.full(len(s), (min_px + max_px) / 2.0, dtype=float)
+
+    # Rang/Perzentil (0..1)
+    p = s.rank(pct=True, method='average').to_numpy(dtype=float)
+
+    # in Pixel mappen
+    return (min_px + (p ** gamma) * (max_px - min_px)).astype(float)
+
 # Example calculation
 median_oi, median_traders = calculate_medians(df_pivoted)
 
@@ -517,39 +536,33 @@ app.layout = html.Div([
 
                 dbc.Row([
                     dbc.Col(dcc.Markdown(r"""
-                **Berechnung Long-Clustering:**
+                **Berechnung Long-Clustering (Money Manager):**
 
                 $$
-                \mathrm{Clustering}_{\mathrm{Long}}(\%) =
-                \frac{\mathrm{current}\;MMLT\% - \min\!\left(MMLT\%_{\mathrm{range}}\right)}
-                     {\max\!\left(MMLT\%_{\mathrm{range}}\right) - \min\!\left(MMLT\%_{\mathrm{range}}\right)}
+                \mathrm{Clustering}^{\mathrm{(Long)}}_{\mathrm{MM}}(\%)=
+                \frac{\mathrm{Number\ of\ traders}^{\mathrm{(Long)}}_{\mathrm{MM}}}
+                {\mathrm{Total\ number\ of\ traders}}
                 $$
                 """, mathjax=True), width=12, lg=6),
 
                     dbc.Col(dcc.Markdown(r"""
-                **Berechnung Short-Clustering:**
+                **Berechnung Short-Clustering (Money Manager):**
 
                 $$
-                \mathrm{Clustering}_{\mathrm{Short}}(\%) =
-                \frac{\mathrm{current}\;MMST\% - \min\!\left(MMST\%_{\mathrm{range}}\right)}
-                     {\max\!\left(MMST\%_{\mathrm{range}}\right) - \min\!\left(MMST\%_{\mathrm{range}}\right)}
+                \mathrm{Clustering}^{\mathrm{(Short)}}_{\mathrm{MM}}(\%)=
+                \frac{\mathrm{Number\ of\ traders}^{\mathrm{(Short)}}_{\mathrm{MM}}}
+                {\mathrm{Total\ number\ of\ traders}}
                 $$
                 """, mathjax=True), width=12, lg=6),
                 ], className="mb-2"),
 
                 dcc.Markdown(r"""
-                wobei
-                $$
-                MML(S)T\%=\frac{MML(S)T\;(\mathrm{futures\ only})}{TTF\;(\mathrm{futures\ only})}
-                $$
-
-                <div style="text-align:center">\( \text{range} = \text{one-year rolling} \)</div>
-
-                **Bedeutung der Abkürzungen:**  
-                - **MML (S):** Long- (Short-) Positionen der Managed Money-Händler
-                - **T%:** prozentuale Verteilung der Positionen
-                - **TTF:** Gesamtanzahl der Händler, die Futures handeln
-                """, mathjax=True, dangerously_allow_html=True),
+                **Bedeutung der Abkürzungen / Begriffe:**
+                - **MM:** Money Manager
+                - **Number of traders $\mathrm{MM}_{\mathrm{Long}}$:** Anzahl MM-Trader mit Long-Positionen
+                - **Number of traders $\mathrm{MM}_{\mathrm{Short}}$:** Anzahl MM-Trader mit Short-Positionen
+                - **Total number of traders:** Gesamtanzahl Trader im Markt
+                """, mathjax=True),
 
                 dcc.Graph(id='long-clustering-graph'),
                 html.Div([], style={'marginTop': '10px'}),
@@ -1622,167 +1635,200 @@ def update_graphs(selected_market, start_date, end_date, mm_type, trader_group):
     # Long Positions Clustering
     long_clustering_fig = go.Figure()
 
-    max_bubble_size = 100  # Maximale gewünschte Größe der Bubbles
-    min_bubble_size = 10  # Mindestpunktgröße für die kleinsten Punkte
-    max_traders = df_pivoted['Total Number of Traders'].max()
+    # 1) Trader-Serie sauber vorbereiten
+    tr_total = pd.to_numeric(filtered_df['Total Number of Traders'], errors='coerce') \
+        .fillna(0).clip(lower=0).astype(float)
 
-# Neue sizeref-Berechnung basierend auf dem angepassten Divisor
-    sizeref = 2 * max_traders / (max_bubble_size**2.5)
+    # 2) Marker-Grössen robust auf fixen Pixelbereich mappen
+    MIN_PX = 8
+    MAX_PX = 30
+    sizes_total = scaled_diameters(tr_total, min_px=MIN_PX, max_px=MAX_PX)
 
-# Add the scatterplot
+    # 3) Scatter
     long_clustering_fig.add_trace(go.Scatter(
-    x=filtered_df['Date'],
-    y=filtered_df['Open Interest'],
-    mode='markers',
-    marker=dict(
-        size=filtered_df['Total Number of Traders'] / 10,
-        color=filtered_df['Long Clustering'],
-        colorscale='Viridis',
-        showscale=True,
-        colorbar=dict(
-            title="Long Clustering (%)",
-            thickness=15,
-            len=0.75,
-            yanchor='middle',
-            y=0.5
-        ),
-    ),
-    text=[f"Traders: {traders}" for traders in filtered_df['Total Number of Traders']],
-    hoverinfo='text',
-    showlegend=False
-))
-
-# Add bubble size legend
-    bubble_sizes = [50, 100, 150]
-    for size in bubble_sizes:
-        long_clustering_fig.add_trace(go.Scatter(
-        x=[None], y=[None],
+        x=filtered_df['Date'],
+        y=filtered_df['Open Interest'],
         mode='markers',
         marker=dict(
-            size=size / 10,
-            color='gray',
-            opacity=0.6
+            size=sizes_total,
+            sizemode='diameter',
+            sizeref=1,
+            color=filtered_df['Long Clustering'],
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(
+                title="Long Clustering (%)",
+                thickness=15,
+                len=0.75,
+                yanchor='middle',
+                y=0.5
+            ),
         ),
-        legendgroup="Bubble Size",
-        showlegend=True,
-        name=f"{size} Traders"
+        text=[
+            f"Date: {d:%Y-%m-%d}<br>Traders: {int(t)}"
+            for d, t in zip(filtered_df['Date'], tr_total)
+        ],
+        hoverinfo='text',
+        showlegend=False
     ))
 
-# Update layout
-    long_clustering_fig.update_layout(
-    title='Long Positions Clustering Indicator',
-    xaxis_title='Date',
-    yaxis_title='Open Interest',
-    xaxis=dict(
-        tickmode='array',
-        tickvals=filtered_df['Date'].dt.year.unique(),
-        ticktext=[str(year) for year in filtered_df['Date'].dt.year.unique()],
-        showgrid=True,
-        ticks="outside",
-        tickangle=45
-    ),
-    yaxis=dict(
-        title='Open Interest',
-        showgrid=True,
-        tick0=0,  # Startwert
-        dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000,
-    ),
-    legend=dict(
-        title=dict(text="Number of Traders"),
-        x=1.2,
-        y=0.5,
-        font=dict(size=12)
-    ),
-)
+    # 4) Bubble-Size-Legende dynamisch (aus der Verteilung des selektierten Marktes)
+    base = tr_total[tr_total > 0]
+    if base.size >= 3:
+        q = [0.10, 0.30, 0.50, 0.70, 0.90]  # 5 Legendenstufen
+        legend_vals = np.unique(np.round(np.quantile(base, q)).astype(int))
+        legend_vals = legend_vals[legend_vals > 0]
+    else:
+        legend_vals = np.array([50, 75, 100, 125, 150], dtype=int)
 
+    legend_sizes = scaled_diameters(legend_vals, min_px=MIN_PX, max_px=MAX_PX)
+
+    for v, s in zip(legend_vals, legend_sizes):
+        long_clustering_fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='markers',
+            marker=dict(size=float(s), sizemode='diameter', sizeref=1, color='gray', opacity=0.6),
+            showlegend=True,
+            name=f"{int(v)} Traders",
+            hoverinfo='skip'
+        ))
+
+    # 5) Layout
+    long_clustering_fig.update_layout(
+        title='Long Positions Clustering Indicator',
+        xaxis_title='Date',
+        yaxis_title='Open Interest',
+        xaxis=dict(
+            tickmode='array',
+            tickvals=filtered_df['Date'].dt.year.unique(),
+            ticktext=[str(year) for year in filtered_df['Date'].dt.year.unique()],
+            showgrid=True,
+            ticks="outside",
+            tickangle=45
+        ),
+        yaxis=dict(
+            title='Open Interest',
+            showgrid=True,
+            tick0=0,
+            dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000,
+        ),
+        legend=dict(
+            title=dict(text="Number of Traders"),
+            itemsizing='trace',
+            x=1.2,
+            y=0.5,
+            font=dict(size=12)
+        ),
+        margin=dict(l=60, r=160, t=60, b=60)
+    )
 
     add_last_point_highlight(
-    fig=long_clustering_fig,
-    df=filtered_df,
-    x_col='Date',
-    y_col='Open Interest',
-    inner_size=2,
-    inner_color='black'
-)
+        fig=long_clustering_fig,
+        df=filtered_df,
+        x_col='Date',
+        y_col='Open Interest',
+        inner_size=2,
+        inner_color='black'
+    )
 
     # Short Positions Clustering
     short_clustering_fig = go.Figure()
 
-# Scatterplot for short clustering
-    short_clustering_fig.add_trace(go.Scatter(
-    x=filtered_df['Date'],
-    y=filtered_df['Open Interest'],
-    mode='markers',
-    marker=dict(
-        size=filtered_df['Total Number of Traders'] / 10,
-        color=filtered_df['Short Clustering'],
-        colorscale='Viridis',
-        showscale=True,
-        colorbar=dict(
-            title="Short Clustering (%)",
-            thickness=15,
-            len=0.75,
-            yanchor='middle',
-            y=0.5  # Position of the color bar
-        ),
-    ),
-    text=[f"Traders: {traders}" for traders in filtered_df['Total Number of Traders']],  # Tooltip
-    hoverinfo='text',
-    showlegend=False
-))
+    # 1) Trader-Serie (gleich wie Long)
+    tr_total = pd.to_numeric(filtered_df['Total Number of Traders'], errors='coerce') \
+        .fillna(0).clip(lower=0).astype(float)
 
-# Add bubble size legend for short clustering
-    bubble_sizes = [50, 100, 150]
-    for size in bubble_sizes:
-        short_clustering_fig.add_trace(go.Scatter(
-        x=[None], y=[None],
+    # 2) gleiche Pixel-Skalierung
+    MIN_PX = 8
+    MAX_PX = 30
+    sizes_total = scaled_diameters(tr_total, min_px=MIN_PX, max_px=MAX_PX)
+
+    # 3) Scatter
+    short_clustering_fig.add_trace(go.Scatter(
+        x=filtered_df['Date'],
+        y=filtered_df['Open Interest'],
         mode='markers',
         marker=dict(
-            size=size / 10,
-            color='gray',
-            opacity=0.6
+            size=sizes_total,
+            sizemode='diameter',
+            sizeref=1,
+            color=filtered_df['Short Clustering'],
+            colorscale='Viridis',
+            showscale=True,
+            colorbar=dict(
+                title="Short Clustering (%)",
+                thickness=15,
+                len=0.75,
+                yanchor='middle',
+                y=0.5
+            ),
         ),
-        legendgroup="Bubble Size",
-        showlegend=True,
-        name=f"{size} Traders"
+        text=[
+            f"Date: {d:%Y-%m-%d}<br>Traders: {int(t)}"
+            for d, t in zip(filtered_df['Date'], tr_total)
+        ],
+        hoverinfo='text',
+        showlegend=False
     ))
 
-# Update layout for short clustering graph
-    short_clustering_fig.update_layout(
-    title='Short Positions Clustering Indicator',
-    xaxis_title='Date',
-    yaxis_title='Open Interest',
-    xaxis=dict(
-        tickmode='array',
-        tickvals=filtered_df['Date'].dt.year.unique(),
-        ticktext=[str(year) for year in filtered_df['Date'].dt.year.unique()],
-        showgrid=True,
-        ticks="outside",
-        tickangle=45
-    ),
-    yaxis=dict(
-        title='Open Interest',
-        showgrid=True,
-        tick0=0,  # Startwert
-        dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000,
-    ),
-    legend=dict(
-        title=dict(text="Number of Traders"),
-        x=1.2,
-        y=0.5,
-        font=dict(size=12)
-    )
-)
+    # 4) Bubble-Size-Legende dynamisch
+    base = tr_total[tr_total > 0]
+    if base.size >= 3:
+        q = [0.10, 0.30, 0.50, 0.70, 0.90]
+        legend_vals = np.unique(np.round(np.quantile(base, q)).astype(int))
+        legend_vals = legend_vals[legend_vals > 0]
+    else:
+        legend_vals = np.array([50, 75, 100, 125, 150], dtype=int)
 
-# Add last point highlight
+    legend_sizes = scaled_diameters(legend_vals, min_px=MIN_PX, max_px=MAX_PX)
+
+    for v, s in zip(legend_vals, legend_sizes):
+        short_clustering_fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode='markers',
+            marker=dict(size=float(s), sizemode='diameter', sizeref=1, color='gray', opacity=0.6),
+            showlegend=True,
+            name=f"{int(v)} Traders",
+            hoverinfo='skip'
+        ))
+
+    # 5) Layout
+    short_clustering_fig.update_layout(
+        title='Short Positions Clustering Indicator',
+        xaxis_title='Date',
+        yaxis_title='Open Interest',
+        xaxis=dict(
+            tickmode='array',
+            tickvals=filtered_df['Date'].dt.year.unique(),
+            ticktext=[str(year) for year in filtered_df['Date'].dt.year.unique()],
+            showgrid=True,
+            ticks="outside",
+            tickangle=45
+        ),
+        yaxis=dict(
+            title='Open Interest',
+            showgrid=True,
+            tick0=0,
+            dtick=20000 if selected_market in ['Gold', 'Silver', 'Copper'] else 5000,
+        ),
+        legend=dict(
+            title=dict(text="Number of Traders"),
+            itemsizing='trace',
+            x=1.2,
+            y=0.5,
+            font=dict(size=12)
+        ),
+        margin=dict(l=60, r=160, t=60, b=60)
+    )
+
     add_last_point_highlight(
-    fig=short_clustering_fig,
-    df=filtered_df,
-    x_col='Date',
-    y_col='Open Interest',
-    inner_size=2,
-    inner_color='black'
-)
+        fig=short_clustering_fig,
+        df=filtered_df,
+        x_col='Date',
+        y_col='Open Interest',
+        inner_size=2,
+        inner_color='black'
+    )
 
     # OR Long Position Size Indicator
     or_long_position_size_fig = go.Figure()
