@@ -2,8 +2,9 @@ import pandas as pd
 from influxdb_client import InfluxDBClient, Point, WritePrecision, WriteOptions
 import os
 
-# Define the file path
-file_path = os.path.expanduser(r"C:\Users\basil\Desktop\CoT-Data\CoT-Data_Last-ten-years.xlsx")
+from src.clients.fredapi_client import FredClient
+from src.services.fred_api_data_service import FredMacroService
+from src.services.trades_category_service import TradesCategoryService
 
 # Initialize the InfluxDB client
 token = "GmtV-5jzEZCrfZ7Bq-qhc8b7kf4g5nMjYy2sf6ix149GFULNxSAHU5ZVXA-m-xaaxyUKF9wZt7w44h95WdoXJg=="
@@ -12,14 +13,16 @@ bucket = "CoT-Data"
 
 client = InfluxDBClient(url="http://localhost:8086", token=token)
 
-# Read the Excel file into a DataFrame
-df = pd.read_excel(file_path, sheet_name='Sheet1')
+# Get data from Socrata
+service = TradesCategoryService()
+tc_df = service.load_dataframe()
+tc_df = service.filter_and_rename(tc_df)
 
 # Prepare data for InfluxDB
 write_api = client.write_api(write_options=WriteOptions(batch_size=500, flush_interval=10_000))
 
 # Iterate through the DataFrame and write data points to InfluxDB
-for index, row in df.iterrows():
+for index, row in tc_df.iterrows():
     point = Point("cot_data") \
         .tag("market_names", row['Market Names']) \
         .field("Open Interest", row['Open Interest']) \
@@ -48,6 +51,27 @@ for index, row in df.iterrows():
         .field("Traders Other Rept Spread", row['Traders_Other_Rept_Spread']) \
         .time(pd.to_datetime(row['Date'], format='%y%m%d'), WritePrecision.NS)
     write_api.write(bucket=bucket, org=org, record=point)
+
+service = FredMacroService()
+fred_df = service.load_dataframe()
+
+points = []
+
+for index, row in fred_df.iterrows():
+    p = Point("macro_by_date").time(row["date"].to_pydatetime(), WritePrecision.NS)
+
+    if pd.notna(row.get("vix")):
+        p = p.field("vix", float(row["vix"]))
+    if pd.notna(row.get("usd_index")):
+        p = p.field("usd_index", float(row["usd_index"]))
+    if pd.notna(row.get("usd_chf")):
+        p = p.field("usd_chf", float(row["usd_chf"]))
+
+    # only write if at least one field exists
+    if len(p._fields) > 0:
+        points.append(p)
+
+write_api.write(bucket=bucket, org=org, record=points)
 
 # Ensure all data is written and wait until all pending writes are completed
 write_api.__del__()
