@@ -76,7 +76,7 @@ def combine_xls_files(folder_path, output_file_name):
         "Traders_Other_Rept_Short_All",
         "Traders_Other_Rept_Spread_All"
     ]
-    
+
     combined_data = []
     for year in range(2014, 2025):
         file_path = os.path.join(folder_path, f'{year}_CoT-Data.xls')
@@ -84,7 +84,7 @@ def combine_xls_files(folder_path, output_file_name):
             df = pd.read_excel(file_path, usecols=columns_to_keep)
             combined_data.append(df)
     combined_data = pd.concat(combined_data, ignore_index=True)
-    
+
     # Rename columns
     combined_data.rename(columns={
         "Market_and_Exchange_Names": "Market Names",
@@ -114,7 +114,7 @@ def combine_xls_files(folder_path, output_file_name):
         "Traders_Other_Rept_Short_All": "Traders_Other_Rept_Short",
         "Traders_Other_Rept_Spread_All": "Traders_Other_Rept_Spread"
     }, inplace=True)
-    
+
     # Filter and rename market names
     market_filter = {
         "GOLD - COMMODITY EXCHANGE INC.": "Gold",
@@ -123,10 +123,10 @@ def combine_xls_files(folder_path, output_file_name):
         "PALLADIUM - NEW YORK MERCANTILE EXCHANGE": "Palladium",
         "COPPER- #1 - COMMODITY EXCHANGE INC.": "Copper"
     }
-    
+
     combined_data = combined_data[combined_data["Market Names"].isin(market_filter.keys())]
     combined_data["Market Names"].replace(market_filter, inplace=True)
-    
+
     output_file_path = os.path.join(folder_path, f'{output_file_name}.xlsx')
     if os.path.exists(output_file_path):
         os.remove(output_file_path)
@@ -153,7 +153,7 @@ def main():
         '#content-container > section > div > article > div > div > table:nth-child(2) > tbody > tr:nth-child(4) > td:nth-child(2) > p > a:nth-child(2)'
     ]
 
-    years = range(2024, 2013, -1)
+    years = range(2025, 2014, -1)
 
     for selector, year in zip(selectors, years):
         link = soup.select_one(selector).get('href')
